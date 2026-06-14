@@ -1,0 +1,10 @@
+# 기본: 텍스트 자동 판별 + LF 정규화
+* text=auto eol=lf
+
+# 셸 스크립트는 LF
+*.sh text eol=lf
+
+# Windows 스크립트는 CRLF
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf

@@ -1,0 +1,31 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Environment files (혹시 추가될 경우)
+.env
+.env.local
+.env.*.local
+
+# 로컬 사용자 설정/생성물 (런타임은 ~/.tokenphage 사용 — 방어적으로 무시)
+.tokenphage/
+
+# Claude Code 작업 파일(작업 환경 전용 규칙·세션 메타)은 공개하지 않는다.
+.claude/
+CLAUDE.md

@@ -1,0 +1,40 @@
+{
+  "name": "tokenphage",
+  "version": "0.1.0",
+  "description": "AI 토큰 사용량 GitHub README 뱃지",
+  "author": "kobenlys <kobenlys@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TOKENPHAGE/tokenphage-cli.git"
+  },
+  "main": "src/index.js",
+  "bin": {
+    "tokenphage": "./src/index.js"
+  },
+  "type": "module",
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "cross-env TOKENPHAGE_API=http://localhost:8080 node src/index.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "@inquirer/prompts": "^8.5.0",
+    "chalk": "^5.6.2",
+    "commander": "^12.1.0",
+    "glob": "^11.0.0",
+    "gradient-string": "^3.0.0",
+    "open": "^10.1.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3"
+  },
+  "overrides": {
+    "mute-stream": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.17.0"
+  }
+}
