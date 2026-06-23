@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+/**
+ * tokenphage CLI 진입점 (package.json "bin"이 가리키는 파일).
+ * 구조: ① 상단 import(의존성) → ② 중단 run* 함수 정의(명령별 동작) → ③ 하단에서 commander로 명령을 등록하고
+ *       맨 끝 program.parse()가 argv를 해석해 실제 시동을 건다.
+ */
 import { Command } from 'commander';
 import { parseAll } from './parser.js';
 import { loadToken, saveToken, getOrCreateDeviceId, gistLogin, setHookInstalled, getLastSyncDate, saveLastSyncDate, clearLastSyncDate } from './auth.js';
@@ -9,11 +14,20 @@ import { accent } from './gradient.js';
 import { localDateOf } from './lib/dates.js';
 import { claudeDirCandidates } from './parser.js';
 import { checkClaudeRetention, applyRetentionSetting, DEFAULT_CLEANUP_DAYS } from './lib/retention.js';
+import { refreshCache, getUpdateInfo } from './lib/update-check.js';
+import { runUpdate } from './lib/updater.js';
 import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
+import { createRequire } from 'node:module';
 
+// API 서버 주소: 환경변수 우선, 없으면 운영 기본값 (dev는 TOKENPHAGE_API로 주입)
 const API_BASE = process.env.TOKENPHAGE_API ?? 'https://api.tokenphage.com';
 
+// package.json의 version 조회
+// createRequire는 import.meta.url 기준 상대경로를 해석하고, JSON import와 달리 Node 20에서도 경고 없이 동작한다.
+const { version } = createRequire(import.meta.url)('../package.json');
+
+/** 저장된 JWT를 반환한다. 없으면 로그인 안내를 출력하고 프로세스를 종료(exit 1)한다. */
 function requireToken() {
   const token = loadToken();
   if (!token) {
@@ -24,6 +38,7 @@ function requireToken() {
   return token;
 }
 
+/** install-hook 명령 본체: 자동 sync 스케줄을 등록하고 설치 상태를 저장한 뒤 초기 sync까지 수행한다. */
 async function runInstallHook() {
   requireToken();
   const result = await installHook();
@@ -36,14 +51,17 @@ async function runInstallHook() {
   await runSync();
 }
 
+/** uninstall-hook 명령 본체: 자동 sync 스케줄을 제거하고 설치 상태를 해제한다(스케줄이 없어도 정상 처리). */
 async function runUninstallHook() {
   const result = await uninstallHook();
   setHookInstalled(false);
   console.log(result.removed ? '[OK] Removed' : '[OK] No schedule found');
 }
 
-// gist 인증 직후 1회: Claude Code의 자동 삭제 위험을 실제 설정값과 함께 안내하고,
-// 동의(Y) 시 무조건 99999로 설정한다. 이미 99999 이상이면 조용히 통과한다.
+/**
+ * gist 인증 직후 1회: Claude Code의 자동 삭제 위험을 실제 설정값과 함께 안내하고,
+ * 동의(Y) 시 무조건 99999로 설정한다. 이미 99999 이상이면 조용히 통과한다.
+ */
 async function promptRetentionSetup() {
   const check = checkClaudeRetention(claudeDirCandidates());
   if (!check.needed) return;
@@ -107,6 +125,7 @@ async function promptRetentionSetup() {
   }
 }
 
+/** sync 명령 본체: 로컬 로그를 파싱(최초=전체 / 이후=증분)해 서버로 업로드하고, 마지막 sync 날짜를 갱신한다. */
 async function runSync() {
   const token = requireToken();
   const deviceId = getOrCreateDeviceId();
@@ -130,8 +149,18 @@ async function runSync() {
   await syncRecords(API_BASE, token, deviceId, records);
   saveLastSyncDate(today);
   console.log('Done! Badge will update shortly.');
+
+  // 이미 네트워크를 쓰는 지점이므로 여기서 npm 최신버전 캐시를 갱신한다(TTL 게이트 내장, 실패 무해).
+  // 04:00 자동 sync가 이 경로로 캐시를 채워, 다음 대시보드 진입 시 업데이트 배너가 뜬다.
+  await refreshCache(Date.now());
 }
 
+/**
+ * 고급 메뉴 본체: 현재는 'reset'(전체 초기화)만 처리한다.
+ * 확인 → 서버 데이터 삭제 → 로컬 워터마크 제거 → 전체 재-sync 순으로 진행하며, 각 단계 실패를 명확히 안내한다.
+ * @param {string} apiBase API 서버 base URL
+ * @param {object} cfg 현재 설정(JWT 포함)
+ */
 async function runAdvanced(apiBase, cfg) {
   const sub = await promptAdvanced();
   if (sub !== 'reset') return; // 'back' → 메시지 없이 즉시 대시보드 복귀
@@ -170,9 +199,12 @@ async function runAdvanced(apiBase, cfg) {
   await pauseForEnter();
 }
 
+// ========================================== START - CLI =========================================
 const program = new Command();
-program.name('tokenphage').description('AI token usage as a GitHub README badge — Tokenphage').version('0.1.0');
+program.name('tokenphage').description('AI token usage as a GitHub README badge — Tokenphage').version(version);
 
+// 기본 동작: 인자 없이 `tokenphage` 실행 시.
+// 미인증이면 인증 루프 → 보존 설정 → 초기 sync를 먼저 거치고, 그 뒤 대시보드 루프로 진입한다.
 program.action(async () => {
   if (!process.stdin.isTTY) {
     program.help();
@@ -211,7 +243,10 @@ program.action(async () => {
       }
     }
 
+    // 인증 이후 메뉴는 최신 설정이 필요하므로 여기서 동적 import (상단 정적 import과 별개)
     const { loadConfig } = await import('./auth.js');
+    // 업데이트 캐시를 백그라운드로 갱신한다(await 안 함 → startup 지연 0). 결과는 다음 렌더에 반영된다.
+    refreshCache(Date.now()).catch(() => {});
     // 대시보드 루프: 액션 수행 후 메인으로 복귀, Exit/Esc 에서만 종료
     while (true) {
       const cfg = loadConfig();
@@ -221,6 +256,15 @@ program.action(async () => {
       else if (action === 'install-hook') await runInstallHook();
       else if (action === 'uninstall-hook') await runUninstallHook();
       else if (action === 'advanced') await runAdvanced(API_BASE, cfg);
+      else if (action === 'update') {
+        // 업데이트 성공 시 현재 프로세스는 여전히 구버전 코드 → 재실행 안내 후 종료.
+        const { hasUpdate, latest } = getUpdateInfo(version, cfg);
+        if (hasUpdate) {
+          const result = await runUpdate(latest);
+          await pauseForEnter();
+          if (result.updated) process.exit(0);
+        }
+      }
     }
   } catch (err) {
     if (err.name === 'ExitPromptError') process.exit(0);
@@ -229,6 +273,9 @@ program.action(async () => {
   }
 });
 
+// ── 명시적 서브커맨드: `tokenphage <command>` 형태로 직접 호출하며, 위에서 정의한 run* 함수를 실행한다 ──
+
+// login [username]: Gist로 GitHub 소유권 증명 → JWT 저장 → 보존 설정 → 초기 sync. (대화형 터미널 필요)
 program.command('login [username]')
   .description('Prove GitHub account ownership via a public Gist and save the JWT')
   .action(async (username) => {
@@ -250,6 +297,7 @@ program.command('login [username]')
     }
   });
 
+// sync: 로컬 Claude/Codex 로그를 파싱해 서버로 업로드한다(배지 갱신). 미인증이면 안내 후 종료.
 program.command('sync')
   .description('Sync local Claude Code token usage to the server')
   .action(async () => {
@@ -257,6 +305,7 @@ program.command('sync')
     catch (err) { showError('Sync failed', err.message); process.exitCode = 1; }
   });
 
+// install-hook: 매일 04:00 자동 sync 스케줄을 OS별(macOS launchd / Windows Task Scheduler)로 등록한다.
 program.command('install-hook')
   .description('Register a daily 04:00 auto-sync schedule (macOS launchd / Windows Task Scheduler)')
   .action(async () => {
@@ -264,6 +313,7 @@ program.command('install-hook')
     catch (err) { showError('Install-hook failed', err.message); process.exitCode = 1; }
   });
 
+// uninstall-hook: 자동 sync 스케줄을 제거한다(스케줄이 없어도 안전한 멱등 동작).
 program.command('uninstall-hook')
   .description('Remove the auto-sync schedule (idempotent)')
   .action(async () => {
@@ -271,4 +321,4 @@ program.command('uninstall-hook')
     catch (err) { showError('Uninstall-hook failed', err.message); process.exitCode = 1; }
   });
 
-program.parse();
+program.parse(); // argv를 해석해 알맞은 .action()으로 분기 — CLI 실제 시동 지점

@@ -3,6 +3,11 @@ import gradient from 'gradient-string';
 import { colorAt, PURPLE_STOPS, ACCENT_STOPS, accent } from './gradient.js';
 import { selectWithEsc } from './animated-select.js';
 import { input } from '@inquirer/prompts';
+import { createRequire } from 'node:module';
+import { getUpdateInfo, PACKAGE_NAME } from './lib/update-check.js';
+
+// 버전은 package.json 단일 출처에서 읽는다 (index.js와 동일 패턴 — 하드코딩으로 인한 표기 불일치 방지).
+const { version } = createRequire(import.meta.url)('../package.json');
 
 const TOKEN_LINES = [
   '  ████████╗ ██████╗ ██╗  ██╗███████╗███╗  ██╗',
@@ -87,7 +92,7 @@ export function printWelcome() {
 
   console.log('\n' + logo);
   console.log();
-  console.log(chalk.gray('  AI token usage as a GitHub badge — v0.1.0'));
+  console.log(chalk.gray(`  AI token usage as a GitHub badge — v${version}`));
   console.log();
 }
 
@@ -122,11 +127,20 @@ export async function promptFirstRun() {
 
 /**
  * 인증된 사용자를 위한 대시보드 메뉴.
- * @param {{ token: string, lastSyncDate: string|null, hookInstalled: boolean, hookMeta: object|null }} cfg
- * @returns {'sync' | 'install-hook' | 'uninstall-hook' | 'advanced' | 'exit'}
+ * @param {{ token: string, lastSyncDate: string|null, hookInstalled: boolean, hookMeta: object|null, latestVersion?: string }} cfg
+ * @returns {'update' | 'sync' | 'install-hook' | 'uninstall-hook' | 'advanced' | 'exit'}
  */
 export async function promptDashboard(cfg) {
   printWelcome();
+
+  // 캐시된 npm 최신버전과 현재 버전을 비교해, 새 버전이 있을 때만 민트 배너를 출력한다(네트워크 X).
+  const update = getUpdateInfo(version, cfg);
+  if (update.hasUpdate) {
+    const bar = accent('  ┃ ');
+    console.log(bar + accent(`⬆  Update available  v${update.current} → v${update.latest}`));
+    console.log(bar + chalk.gray(`npm install -g ${PACKAGE_NAME}@latest`));
+    console.log();
+  }
 
   const username = decodeJwtUsername(cfg.token) ?? '(unknown)';
   const lastSync = cfg.lastSyncDate ?? 'never';
@@ -142,6 +156,16 @@ export async function promptDashboard(cfg) {
   const choices = [
     { name: 'Sync now', value: 'sync', description: 'Push local token data to the server' },
   ];
+
+  // 새 버전이 있으면 최상단에 흐르는 강조(flow) Update 선택지를 추가한다.
+  if (update.hasUpdate) {
+    choices.unshift({
+      name: `⬆ Update to v${update.latest}`,
+      value: 'update',
+      description: 'Download and install the latest version',
+      flow: true,
+    });
+  }
 
   if (cfg.hookInstalled) {
     choices.push({ name: 'Disable auto-sync', value: 'uninstall-hook', flow: true });
