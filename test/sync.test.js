@@ -1,14 +1,21 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { syncRecords, resetData } from '../src/sync.js';
+import { syncRecords, resetData, mapServerError } from '../src/sync.js';
 
 // 테스트 목록
 // 1. syncRecords_정상2xx_sync엔드포인트에계약대로POST            (성공: URL/메서드/헤더/바디 shape)
-// 2. syncRecords_비2xx응답_status포함Error로throw               (실패)
-// 3. resetData_정상2xx_reset엔드포인트에바디없이POST            (성공)
-// 4. resetData_429응답_서버message만throw                       (경계: prefix 없이 원문)
-// 5. resetData_기타에러JSON본문_ServerError프리픽스포함throw    (실패)
-// 6. resetData_비JSON본문_텍스트그대로폴백                      (경계)
+// 2. syncRecords_500응답_일시오류메시지로throw                  (실패: mapServerError 매핑, 원문 미노출)
+// 3. syncRecords_401응답_재로그인메시지로throw                  (실패: 인증)
+// 4. resetData_정상2xx_reset엔드포인트에바디없이POST            (성공)
+// 5. resetData_429응답_서버message만throw                       (경계: prefix 없이 원문)
+// 6. resetData_429비JSON본문_원문텍스트폴백                     (경계: JSON 파싱 실패)
+// 7. resetData_500응답_일시오류메시지로throw                    (실패: mapServerError 매핑)
+// [mapServerError] 상태코드 → 영어 메시지 (순수)
+// 8. mapServerError_401_재로그인지시                            (성공)
+// 9. mapServerError_400deviceId_설정손상안내                    (경계)
+// 10. mapServerError_400기타_업데이트안내                       (경계)
+// 11. mapServerError_500_일시오류안내                           (성공)
+// 12. mapServerError_알수없는상태_폴백                          (실패 입력)
 //
 // syncRecords/resetData는 전역 fetch만 사용하므로(node-fetch 의존 없음) globalThis.fetch를
 // 스텁해 네트워크·DB 없이 요청 계약(URL·메서드·헤더·바디 shape)과 에러 처리를 고정한다.
@@ -57,15 +64,28 @@ test('syncRecords_정상2xx_sync엔드포인트에계약대로POST', async () =>
   assert.deepEqual(JSON.parse(init.body), { deviceId: DEVICE_ID, records: RECORDS });
 });
 
-test('syncRecords_비2xx응답_status포함Error로throw', async () => {
+test('syncRecords_500응답_일시오류메시지로throw', async () => {
   // Given: 서버가 500과 본문을 반환
   stubFetch({ ok: false, status: 500, body: 'internal boom' });
 
   // When
-  // Then: status와 본문을 담아 throw
+  // Then: 원문 대신 매핑된 메시지로 throw
   await assert.rejects(
     () => syncRecords(API_BASE, TOKEN, DEVICE_ID, RECORDS),
-    (err) => err instanceof Error && /500/.test(err.message) && /internal boom/.test(err.message),
+    (err) => err instanceof Error
+      && err.message === 'Server temporarily unavailable. Your existing badge data is safe.',
+  );
+});
+
+test('syncRecords_401응답_재로그인메시지로throw', async () => {
+  // Given: 인증 실패(토큰 만료/손상)
+  stubFetch({ ok: false, status: 401, body: '' });
+
+  // When
+  // Then: 재로그인 실행 지시 메시지
+  await assert.rejects(
+    () => syncRecords(API_BASE, TOKEN, DEVICE_ID, RECORDS),
+    (err) => err.message === 'Authentication expired or invalid. Run `tokenphage login` to sign in again.',
   );
 });
 
@@ -97,26 +117,56 @@ test('resetData_429응답_서버message만throw', async () => {
   );
 });
 
-test('resetData_기타에러JSON본문_ServerError프리픽스포함throw', async () => {
+test('resetData_429비JSON본문_원문텍스트폴백', async () => {
+  // Given: 429인데 본문이 JSON이 아님
+  stubFetch({ ok: false, status: 429, body: 'Too Many Requests' });
+
+  // When
+  // Then: 429 쿨다운 경로는 JSON 파싱 실패 시 원문 텍스트를 그대로 노출
+  await assert.rejects(
+    () => resetData(API_BASE, TOKEN),
+    (err) => err.message === 'Too Many Requests',
+  );
+});
+
+test('resetData_500응답_일시오류메시지로throw', async () => {
   // Given: 500 + JSON message
   stubFetch({ ok: false, status: 500, body: JSON.stringify({ message: 'db down' }) });
 
   // When
-  // Then: 429가 아니면 "Server error: {status} {message}" 형식
+  // Then: 429가 아닌 오류는 mapServerError로 매핑(서버 원문 미노출)
   await assert.rejects(
     () => resetData(API_BASE, TOKEN),
-    (err) => err.message === 'Server error: 500 db down',
+    (err) => err.message === 'Server temporarily unavailable. Your existing badge data is safe.',
   );
 });
 
-test('resetData_비JSON본문_텍스트그대로폴백', async () => {
-  // Given: 500 + JSON이 아닌 본문
-  stubFetch({ ok: false, status: 500, body: '<html>Bad Gateway</html>' });
+// ── mapServerError (순수) ───────────────────────────────────
+test('mapServerError_401_재로그인지시', () => {
+  // Given / When / Then
+  assert.equal(mapServerError(401), 'Authentication expired or invalid. Run `tokenphage login` to sign in again.');
+});
 
-  // When
-  // Then: JSON 파싱 실패 시 원문 텍스트로 폴백
-  await assert.rejects(
-    () => resetData(API_BASE, TOKEN),
-    (err) => err.message === 'Server error: 500 <html>Bad Gateway</html>',
-  );
+test('mapServerError_400deviceId_설정손상안내', () => {
+  // Given: 서버 400 본문에 deviceId 위반 메시지
+  const msg = mapServerError(400, JSON.stringify({ message: 'deviceId must be a valid UUID' }));
+  // Then: 설정 손상 → 재로그인 안내
+  assert.equal(msg, 'Your config file looks corrupted. Run `tokenphage login` to re-authenticate.');
+});
+
+test('mapServerError_400기타_업데이트안내', () => {
+  // Given: deviceId 외 형식 위반
+  const msg = mapServerError(400, JSON.stringify({ message: 'date must be in ISO format' }));
+  // Then: CLI 업데이트 안내
+  assert.equal(msg, 'Request format error. Update the CLI: npm i -g tokenphage@latest');
+});
+
+test('mapServerError_500_일시오류안내', () => {
+  // Given / When / Then: 5xx는 일시 오류 안내
+  assert.equal(mapServerError(503), 'Server temporarily unavailable. Your existing badge data is safe.');
+});
+
+test('mapServerError_알수없는상태_폴백', () => {
+  // Given / When / Then: 매핑되지 않은 상태는 "Server error: {status}" 폴백
+  assert.equal(mapServerError(418, 'teapot'), 'Server error: 418');
 });
