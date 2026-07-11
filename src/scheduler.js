@@ -1,5 +1,5 @@
 import { execFileSync } from 'child_process';
-import { mkdirSync, writeFileSync, unlinkSync, realpathSync, existsSync } from 'fs';
+import { mkdirSync, writeFileSync, unlinkSync, realpathSync, existsSync, readFileSync } from 'fs';
 import { homedir, tmpdir, userInfo } from 'os';
 import { join } from 'path';
 
@@ -57,8 +57,8 @@ function plistPath() {
   return join(homedir(), 'Library', 'LaunchAgents', `${TASK_LABEL}.plist`);
 }
 
-// macOS용 node 탐색 래퍼 셸 스크립트 경로 (~/.tokenphage/run-sync.sh).
-function syncScriptPathMac() {
+// macOS·Linux 공용 node 탐색 래퍼 셸 스크립트 경로 (~/.tokenphage/run-sync.sh).
+function syncScriptPathSh() {
   return join(homedir(), '.tokenphage', 'run-sync.sh');
 }
 
@@ -175,7 +175,7 @@ function installMac() {
   const { script } = resolveTokenphageBinary();
   const logPath = ensureLogDir();
   const path = plistPath();
-  const wrapper = syncScriptPathMac();
+  const wrapper = syncScriptPathSh();
   mkdirSync(join(homedir(), 'Library', 'LaunchAgents'), { recursive: true });
   mkdirSync(join(homedir(), '.tokenphage'), { recursive: true });
 
@@ -199,7 +199,7 @@ function installMac() {
 // macOS 제거: launchd 등록 해제 후 plist·래퍼 파일을 삭제한다(best-effort). removed 여부를 반환.
 function uninstallMac() {
   const path = plistPath();
-  const wrapper = syncScriptPathMac();
+  const wrapper = syncScriptPathSh();
   const fileExisted = existsSync(path);
   // best-effort 해제 — exit code는 신뢰할 수 없다(거짓 양성).
   launchctlBootout();
@@ -426,18 +426,182 @@ function uninstallWindows() {
   return { platform: 'win32', removed };
 }
 
+// ─── Linux (cron) ─────────────────────────────────────────────────────────────
+
+// crontab 관리 마커: BEGIN..END로 우리 블록만 감싸 멱등 설치/제거 시 식별한다.
+export const CRON_BEGIN = `# BEGIN ${TASK_LABEL} (managed by tokenphage-cli — do not edit)`;
+export const CRON_END = `# END ${TASK_LABEL}`;
+
+// 매일 04:00 sync를 도는 crontab 블록을 만든다. cron은 PATH가 빈약하므로 명령을
+// 직접 부르지 않고 node 탐색 sh 래퍼를 호출하며, 출력은 로그로 리다이렉트한다.
+// 인용은 두 계층을 모두 처리한다: shSingleQuote로 셸 인용(공백·특수문자·한글 안전)한
+// 뒤, cron 파서가 명령 필드에서 개행으로 해석하는 '%'를 '\%'로 이스케이프한다.
+// 경로에 개행이 있으면 단일 crontab 엔트리로 표현할 수 없으므로 설치를 중단한다.
+export function buildCronBlock(wrapperPath, logPath) {
+  for (const p of [wrapperPath, logPath]) {
+    if (/\n/.test(p)) throw new Error(`경로에 개행이 있어 cron 엔트리를 만들 수 없습니다: ${JSON.stringify(p)}`);
+  }
+  const schedule = `${SCHEDULE_MINUTE} ${SCHEDULE_HOUR} * * *`; // "0 4 * * *"
+  const cronArg = (s) => shSingleQuote(s).replace(/%/g, '\\%'); // 셸 인용 후 cron '%' 이스케이프(순서 중요)
+  const line = `${schedule} /bin/sh ${cronArg(wrapperPath)} >> ${cronArg(logPath)} 2>&1`;
+  return `${CRON_BEGIN}\n${line}\n${CRON_END}`;
+}
+
+// 기존 crontab 문자열에서 우리 BEGIN..END 블록만 제거한다(남의 항목은 보존).
+// 정규식 대신 라인 단위 매칭으로 사용자 라인을 오검출하지 않는다. 완결된 BEGIN..END
+// 페어만 제거하고, END를 못 만난 고아 BEGIN(수동 편집·손상)은 버퍼째 되살려 그 뒤
+// 사용자 라인이 통째로 삭제되는 데이터 손실을 막는다(파괴적 해석 대신 보존).
+export function removeCronBlock(existing) {
+  const lines = String(existing).split('\n');
+  const out = [];
+  let buffer = null; // 미종료 BEGIN 이후 라인을 임시 보관
+  for (const line of lines) {
+    if (line === CRON_BEGIN) {
+      if (buffer !== null) out.push(...buffer); // 직전 고아 BEGIN 블록은 보존
+      buffer = [line];
+      continue;
+    }
+    if (buffer !== null) {
+      if (line === CRON_END) { buffer = null; continue; } // 완결 페어 → 제거 확정
+      buffer.push(line);
+      continue;
+    }
+    out.push(line);
+  }
+  if (buffer !== null) out.push(...buffer); // 고아 BEGIN: 아무것도 삭제하지 않고 원문 보존
+  return out.join('\n');
+}
+
+// 기존 블록 제거 후 새 블록을 append한다. 항상 trailing newline으로 끝낸다
+// (vixie-cron은 마지막 줄 개행이 없으면 거부/경고할 수 있음).
+export function upsertCronContent(existing, block) {
+  const base = removeCronBlock(existing).replace(/\n+$/, ''); // 꼬리 공백 라인 정리
+  const body = base.length ? `${base}\n${block}` : block;
+  return `${body}\n`;
+}
+
+// crontab 바이너리 존재 여부 (최소/distroless 컨테이너엔 없을 수 있음).
+function hasCrontab() {
+  try {
+    execFileSync('sh', ['-c', 'command -v crontab'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 현재 사용자 crontab 전체를 반환한다. '확정된 빈 crontab'만 ''로 취급하고,
+// 그 외 읽기 실패는 fail-closed로 throw한다 — 이 값이 crontab 전체 재기록의 base가
+// 되므로, 애매한 실패를 ''로 흡수하면 사용자의 기존 항목을 통째로 덮어쓸 수 있다.
+function readCrontab() {
+  try {
+    // maxBuffer 상향: 대형(정상) crontab이 기본 1MB를 넘겨 ENOBUFS로 오인 실패하는 것을 막는다.
+    return execFileSync('crontab', ['-l'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  } catch (err) {
+    // 빈 crontab: exit≠0 + stderr 'no crontab for <user>' → 이때만 빈 문자열(잃을 항목 없음).
+    const stderr = (err.stderr?.toString() || '').toLowerCase();
+    if (stderr.includes('no crontab')) return '';
+    if (err.code === 'ENOENT') throw new Error('crontab command not found');
+    // 그 외(ENOBUFS·권한·일시 I/O 등)는 파괴적 재기록을 막기 위해 중단한다.
+    throw new Error(`기존 crontab을 안전하게 읽지 못했습니다 (code=${err.code ?? 'unknown'}). 사용자 항목 소실을 막기 위해 중단합니다.`);
+  }
+}
+
+// cron 데몬 가동 여부(best-effort). Debian=cron, RHEL=crond, Alpine=busybox crond.
+// 탐지 실패가 곧 '안 돎'을 뜻하진 않으므로 경고 판단에만 쓰고 hard-fail하지 않는다.
+function detectCronDaemon() {
+  try {
+    execFileSync('sh', ['-c', 'pgrep -x cron || pgrep -x crond'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// WSL 여부: WSL_DISTRO_NAME env 또는 /proc/version에 microsoft 포함.
+function isWSL() {
+  if (process.env.WSL_DISTRO_NAME) return true;
+  try {
+    return /microsoft|wsl/i.test(readFileSync('/proc/version', 'utf8'));
+  } catch {
+    return false;
+  }
+}
+
+// Linux 설치: sh 래퍼 작성(멱등) → crontab에 마커 블록 upsert → 데몬/WSL 경고.
+function installLinux() {
+  if (!hasCrontab()) {
+    throw new Error(
+      'crontab 명령을 찾을 수 없습니다. cron을 설치한 뒤 다시 시도하세요.\n' +
+      '  Debian/Ubuntu: sudo apt install cron\n' +
+      '  RHEL 계열:     sudo dnf install cronie');
+  }
+  const { script } = resolveTokenphageBinary();
+  const logPath = ensureLogDir();
+  const wrapper = syncScriptPathSh();
+  mkdirSync(join(homedir(), '.tokenphage'), { recursive: true });
+
+  // 래퍼를 먼저 깔고, crontab 라인이 이 래퍼를 가리키게 한다.
+  writeFileSync(wrapper, buildSyncShellScript(script), { mode: 0o755 });
+
+  // 읽기 → 우리 블록 제거 → 새 블록 append → stdin으로 전체 교체(멱등).
+  const next = upsertCronContent(readCrontab(), buildCronBlock(wrapper, logPath));
+  execFileSync('crontab', ['-'], { input: next, encoding: 'utf8' });
+
+  // best-effort 경고 — 등록은 성공했으나 실제 발화 조건을 사용자에게 알린다.
+  if (!detectCronDaemon()) {
+    const startCmd = isWSL()
+      ? 'sudo service cron start'
+      : 'sudo systemctl enable --now crond 2>/dev/null || sudo systemctl enable --now cron    (WSL: sudo service cron start)';
+    console.log('[!] cron 데몬이 실행 중이 아닙니다. 아래로 켜야 04:00 스케줄이 실제로 동작합니다:');
+    console.log(`    ${startCmd}`);
+  }
+  if (isWSL()) {
+    console.log('[!] WSL은 인스턴스가 떠 있는 동안에만 cron이 동작합니다(04:00에 PC·WSL이 켜져 있어야 함).');
+  }
+
+  return {
+    platform: 'linux',
+    method: 'cron',
+    logPath,
+    scheduleSpec: `daily ${String(SCHEDULE_HOUR).padStart(2, '0')}:${String(SCHEDULE_MINUTE).padStart(2, '0')}`,
+    artifactPath: `crontab (${TASK_LABEL})`,
+  };
+}
+
+// Linux 제거: crontab에서 마커 블록 제거 후 래퍼 파일 정리(best-effort). removed 반환.
+function uninstallLinux() {
+  let removed = false;
+  if (hasCrontab()) {
+    const current = readCrontab();
+    if (current.includes(CRON_BEGIN)) {
+      const cleaned = removeCronBlock(current).replace(/\n+$/, '');
+      // 남은 내용이 있으면 개행 보장해 기록, 전부 비면 빈 crontab으로 교체.
+      execFileSync('crontab', ['-'], { input: cleaned.length ? `${cleaned}\n` : '', encoding: 'utf8' });
+      removed = true;
+    }
+  }
+  const wrapper = syncScriptPathSh();
+  if (existsSync(wrapper)) {
+    try { unlinkSync(wrapper); removed = true; } catch { /* noop */ }
+  }
+  return { platform: 'linux', removed };
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-/** 현재 OS에 맞는 자동 sync 스케줄을 설치한다 (macOS=launchd / Windows=schtasks). 그 외 OS는 throw. */
+/** 현재 OS에 맞는 자동 sync 스케줄을 설치한다 (macOS=launchd / Windows=schtasks / Linux=cron). 그 외 OS는 throw. */
 export async function installHook() {
   if (process.platform === 'darwin') return installMac();
   if (process.platform === 'win32') return installWindows();
-  throw new Error(`Unsupported OS: ${process.platform}. Only macOS and Windows are supported.`);
+  if (process.platform === 'linux') return installLinux();
+  throw new Error(`Unsupported OS: ${process.platform}. Only macOS, Windows, and Linux are supported.`);
 }
 
-/** 현재 OS의 자동 sync 스케줄을 제거한다 (macOS=launchd / Windows=schtasks). 그 외 OS는 throw. */
+/** 현재 OS의 자동 sync 스케줄을 제거한다 (macOS=launchd / Windows=schtasks / Linux=cron). 그 외 OS는 throw. */
 export async function uninstallHook() {
   if (process.platform === 'darwin') return uninstallMac();
   if (process.platform === 'win32') return uninstallWindows();
-  throw new Error(`Unsupported OS: ${process.platform}. Only macOS and Windows are supported.`);
+  if (process.platform === 'linux') return uninstallLinux();
+  throw new Error(`Unsupported OS: ${process.platform}. Only macOS, Windows, and Linux are supported.`);
 }
