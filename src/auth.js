@@ -1,23 +1,43 @@
-import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { normalizeConfig } from './lib/config-schema.js';
+import { localDateOf } from './lib/dates.js';
 
 // 로컬 설정 파일 경로: ~/.tokenphage/config.json (JWT·deviceId·sync 상태 보관)
 const CONFIG_DIR = join(homedir(), '.tokenphage');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
 
-/** config.json을 읽어 객체로 반환한다. 파일이 없거나 손상됐으면 빈 객체. */
-export function loadConfig() {
-  try { return JSON.parse(readFileSync(CONFIG_PATH, 'utf8')); }
-  catch { return {}; }
+/** 손상된 config.json을 .corrupt-{시각}으로 rename해 보존한다(원본 유지 + 재손상 방지). */
+function quarantineCorruptConfig() {
+  try {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    renameSync(CONFIG_PATH, `${CONFIG_PATH}.corrupt-${stamp}`);
+  } catch { /* 격리 실패는 무시 */ }
 }
 
-/** config 객체를 config.json에 저장한다. JWT가 담기므로 소유자 전용(0600) 권한으로 기록한다. */
+/** config.json을 읽어 정규화된 객체로 반환한다. 파일 없음/손상 시 빈 객체(손상은 격리 후). throw하지 않는다. */
+export function loadConfig() {
+  let raw;
+  try { raw = readFileSync(CONFIG_PATH, 'utf8'); }
+  catch (err) {
+    if (err.code === 'ENOENT') return {}; // 파일 없음
+    return {};                            // 기타 읽기 실패
+  }
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch { quarantineCorruptConfig(); return {}; } // 파싱 실패 → 격리
+  return normalizeConfig(parsed, localDateOf(new Date()));
+}
+
+/** config를 config.json에 원자적으로 저장한다(임시 파일 기록 후 rename, 소유자 전용 0600). */
 export function saveConfig(cfg) {
   mkdirSync(CONFIG_DIR, { recursive: true });
-  writeFileSync(CONFIG_PATH, JSON.stringify(cfg, null, 2), { mode: 0o600 });
-  try { chmodSync(CONFIG_PATH, 0o600); } catch { /* Windows는 chmod 미지원 — 무시 */ }
+  const tmp = `${CONFIG_PATH}.tmp-${process.pid}`; // 같은 디렉터리라 rename 원자적
+  writeFileSync(tmp, JSON.stringify(cfg, null, 2), { mode: 0o600 });
+  try { chmodSync(tmp, 0o600); } catch { /* Windows 미지원 */ }
+  renameSync(tmp, CONFIG_PATH);
 }
 
 /** 저장된 JWT를 반환한다. 없으면 null. */
