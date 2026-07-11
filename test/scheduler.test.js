@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSyncPs1, buildTaskXml } from '../src/scheduler.js';
+import { buildSyncPs1, buildTaskXml, buildCronBlock, removeCronBlock, upsertCronContent, CRON_BEGIN, CRON_END } from '../src/scheduler.js';
 
 // 순수 빌더만 검증한다 — schtasks/launchctl 호출이나 파일 쓰기가 없어 OS 무관하게 돈다.
 
@@ -133,9 +133,100 @@ test('buildTaskXml — UTF-16LE+BOM 인코딩이 원본 XML로 라운드트립�
   assert.equal(buf.subarray(2).toString('utf16le'), xml);
 });
 
+// ─── linux cron (buildCronBlock / removeCronBlock / upsertCronContent) ───────
+// 테스트 목록:
+//  1. buildCronBlock_기본_04시00분식과래퍼호출 (성공)
+//  2. buildCronBlock_공백경로_shSingleQuote로인용 (경계)
+//  3. removeCronBlock_기존블록_우리블록만제거하고타인라인보존 (성공)
+//  4. upsertCronContent_두번적용_블록은항상1개 (멱등/경계)
+//  5. upsertCronContent_빈crontab_블록만+trailing_newline (경계)
+
+test('buildCronBlock — 매일 04:00 스케줄과 sh 래퍼 호출을 담는다', () => {
+  // Act
+  const block = buildCronBlock('/home/u/.tokenphage/run-sync.sh', '/home/u/.tokenphage/logs/sync.log');
+
+  // Assert
+  assert.match(block, /^# BEGIN dev\.tokenphage\.sync/m);
+  assert.match(block, /0 4 \* \* \* \/bin\/sh /);
+  assert.match(block, />> '\/home\/u\/\.tokenphage\/logs\/sync\.log' 2>&1/);
+  assert.match(block, /# END dev\.tokenphage\.sync$/m);
+});
+
+test('buildCronBlock — 공백 든 경로를 shSingleQuote로 안전 인용한다', () => {
+  // Act
+  const block = buildCronBlock('/home/My User/run-sync.sh', '/home/My User/sync.log');
+
+  // Assert
+  assert.match(block, /\/bin\/sh '\/home\/My User\/run-sync\.sh'/);
+});
+
+test('removeCronBlock — 우리 블록만 제거하고 타인 cron 라인은 보존한다', () => {
+  // Arrange
+  const existing = `0 * * * * /usr/bin/other\n${CRON_BEGIN}\n0 4 * * * /bin/sh x\n${CRON_END}\n30 2 * * * /usr/bin/keep`;
+
+  // Act
+  const out = removeCronBlock(existing);
+
+  // Assert
+  assert.match(out, /\/usr\/bin\/other/);
+  assert.match(out, /\/usr\/bin\/keep/);
+  assert.doesNotMatch(out, /run-sync|BEGIN dev\.tokenphage/);
+});
+
+test('upsertCronContent — 두 번 적용해도 블록은 항상 1개다(멱등)', () => {
+  // Arrange
+  const block = buildCronBlock('/w.sh', '/l.log');
+
+  // Act
+  const once = upsertCronContent('0 * * * * /usr/bin/other', block);
+  const twice = upsertCronContent(once, block);
+
+  // Assert
+  assert.equal(once, twice);
+  assert.equal((twice.match(/# BEGIN dev\.tokenphage\.sync/g) || []).length, 1);
+  assert.match(twice, /\/usr\/bin\/other/); // 남의 라인 보존
+  assert.ok(twice.endsWith('\n'));           // trailing newline
+});
+
+test('upsertCronContent — 빈 crontab이면 블록만 남고 개행으로 끝난다', () => {
+  // Act
+  const out = upsertCronContent('', buildCronBlock('/w.sh', '/l.log'));
+
+  // Assert
+  assert.match(out, /^# BEGIN/);
+  assert.ok(out.endsWith('\n'));
+});
+
+test('buildCronBlock — 경로의 %를 \\%로 이스케이프해 cron 명령 절단을 막는다', () => {
+  // Act: % 든 홈 경로
+  const block = buildCronBlock('/home/user%40corp/run-sync.sh', '/l.log');
+
+  // Assert: raw %가 아니라 \% 로 이스케이프되어 cron 파서가 개행으로 오해하지 않는다
+  assert.match(block, /\/home\/user\\%40corp\/run-sync\.sh/);
+});
+
+test('buildCronBlock — 경로에 개행이 있으면 단일 엔트리 불가라 throw한다', () => {
+  // Act / Assert
+  assert.throws(() => buildCronBlock('/home/a\nb/run-sync.sh', '/l.log'), /개행/);
+});
+
+test('removeCronBlock — END 없는 고아 BEGIN이면 삭제 없이 사용자 라인을 보존한다', () => {
+  // Arrange: BEGIN만 있고 END 없음 + 뒤에 사용자 작업 (손상 상태)
+  const orphan = `${CRON_BEGIN}\n0 4 * * * /bin/sh x\n30 2 * * * /usr/bin/critical-backup`;
+
+  // Act
+  const out = removeCronBlock(orphan);
+
+  // Assert: 파괴적 삭제 대신 사용자 라인 보존
+  assert.match(out, /\/usr\/bin\/critical-backup/);
+});
+
 // ─── export 가드 ─────────────────────────────────────────────────────────────
 
 test('순수 빌더가 함수로 export되어 테스트 가능하다', () => {
   assert.equal(typeof buildSyncPs1, 'function');
   assert.equal(typeof buildTaskXml, 'function');
+  assert.equal(typeof buildCronBlock, 'function');
+  assert.equal(typeof removeCronBlock, 'function');
+  assert.equal(typeof upsertCronContent, 'function');
 });

@@ -307,7 +307,7 @@ program.command('sync')
 
 // install-hook: 매일 04:00 자동 sync 스케줄을 OS별(macOS launchd / Windows Task Scheduler)로 등록한다.
 program.command('install-hook')
-  .description('Register a daily 04:00 auto-sync schedule (macOS launchd / Windows Task Scheduler)')
+  .description('Register a daily 04:00 auto-sync schedule (macOS launchd / Windows Task Scheduler / Linux cron)')
   .action(async () => {
     try { await runInstallHook(); }
     catch (err) { showError('Install-hook failed', err.message); process.exitCode = 1; }
