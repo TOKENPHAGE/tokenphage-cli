@@ -20,7 +20,7 @@ Claude Code와 Codex의 토큰 사용량을 모아 GitHub README에 붙일 수 �
 GitHub README(이미지를 붙일 수 있는 곳이면 어디든)에 아래 한 줄만 넣으면 됩니다. `kobenlys`를 본인 GitHub 아이디로 바꾸세요.
 
 ```markdown
-![TokenPhage](https://api.tokenphage.com/badge/kobenlys)
+[![TokenPhage](https://api.tokenphage.com/badge/kobenlys)](https://github.com/TOKENPHAGE/tokenphage-api)
 ```
 
 **결과 ↓**
@@ -32,11 +32,11 @@ GitHub README(이미지를 붙일 수 있는 곳이면 어디든)에 아래 한 
   </tr>
   <tr>
     <td align="center">
-      <img src="https://api.tokenphage.com/badge/kobenlys?theme=gpu&amp;mode=dark" alt="TokenPhage gpu dark 배지"><br/>
+      <a href="https://github.com/TOKENPHAGE/tokenphage-api"><img src="https://api.tokenphage.com/badge/kobenlys?theme=gpu&amp;mode=dark" alt="TokenPhage gpu dark 배지"></a><br/>
       <code>https://api.tokenphage.com/badge/kobenlys?theme=gpu&amp;mode=dark</code>
     </td>
     <td align="center">
-      <img src="https://api.tokenphage.com/badge/kobenlys?theme=claude&amp;mode=light" alt="TokenPhage claude light 배지"><br/>
+      <a href="https://github.com/TOKENPHAGE/tokenphage-api"><img src="https://api.tokenphage.com/badge/kobenlys?theme=claude&amp;mode=light" alt="TokenPhage claude light 배지"></a><br/>
       <code>https://api.tokenphage.com/badge/kobenlys?theme=claude&amp;mode=light</code>
     </td>
   </tr>
