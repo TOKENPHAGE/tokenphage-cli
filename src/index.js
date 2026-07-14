@@ -14,7 +14,7 @@ import { accent } from './gradient.js';
 import { localDateOf } from './lib/dates.js';
 import { claudeDirCandidates } from './parser.js';
 import { checkClaudeRetention, applyRetentionSetting, DEFAULT_CLEANUP_DAYS } from './lib/retention.js';
-import { refreshCache, getUpdateInfo } from './lib/update-check.js';
+import { checkLatestVersion, getUpdateInfo } from './lib/update-check.js';
 import { runUpdate } from './lib/updater.js';
 import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
@@ -149,10 +149,6 @@ async function runSync() {
   await syncRecords(API_BASE, token, deviceId, records);
   saveLastSyncDate(today);
   console.log('Done! Badge will update shortly.');
-
-  // 이미 네트워크를 쓰는 지점이므로 여기서 npm 최신버전 캐시를 갱신한다(TTL 게이트 내장, 실패 무해).
-  // 04:00 자동 sync가 이 경로로 캐시를 채워, 다음 대시보드 진입 시 업데이트 배너가 뜬다.
-  await refreshCache(Date.now());
 }
 
 /**
@@ -245,12 +241,12 @@ program.action(async () => {
 
     // 인증 이후 메뉴는 최신 설정이 필요하므로 여기서 동적 import (상단 정적 import과 별개)
     const { loadConfig } = await import('./auth.js');
-    // 업데이트 캐시를 백그라운드로 갱신한다(await 안 함 → startup 지연 0). 결과는 다음 렌더에 반영된다.
-    refreshCache(Date.now()).catch(() => {});
+    // TUI 진입 시 npm 최신버전을 1회 조회(짧은 타임아웃). 세션 동안 재사용해 배너/메뉴에 반영한다.
+    const latest = await checkLatestVersion();
     // 대시보드 루프: 액션 수행 후 메인으로 복귀, Exit/Esc 에서만 종료
     while (true) {
       const cfg = loadConfig();
-      const action = await promptDashboard(cfg);
+      const action = await promptDashboard(cfg, latest);
       if (action === 'exit') break;
       if (action === 'sync') await runSync();
       else if (action === 'install-hook') await runInstallHook();
@@ -258,7 +254,7 @@ program.action(async () => {
       else if (action === 'advanced') await runAdvanced(API_BASE, cfg);
       else if (action === 'update') {
         // 업데이트 성공 시 현재 프로세스는 여전히 구버전 코드 → 재실행 안내 후 종료.
-        const { hasUpdate, latest } = getUpdateInfo(version, cfg);
+        const { hasUpdate } = getUpdateInfo(version, latest);
         if (hasUpdate) {
           const result = await runUpdate(latest);
           await pauseForEnter();

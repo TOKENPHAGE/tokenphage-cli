@@ -127,14 +127,15 @@ export async function promptFirstRun() {
 
 /**
  * 인증된 사용자를 위한 대시보드 메뉴.
- * @param {{ token: string, lastSyncDate: string|null, hookInstalled: boolean, hookMeta: object|null, latestVersion?: string }} cfg
+ * @param {{ token: string, lastSyncDate: string|null, hookInstalled: boolean, hookMeta: object|null }} cfg
+ * @param {string|null} latest TUI 진입 시 조회한 npm 최신버전(조회 실패/옵트아웃 시 null)
  * @returns {'update' | 'sync' | 'install-hook' | 'uninstall-hook' | 'advanced' | 'exit'}
  */
-export async function promptDashboard(cfg) {
+export async function promptDashboard(cfg, latest) {
   printWelcome();
 
-  // 캐시된 npm 최신버전과 현재 버전을 비교해, 새 버전이 있을 때만 민트 배너를 출력한다(네트워크 X).
-  const update = getUpdateInfo(version, cfg);
+  // TUI 진입 시 조회한 npm 최신버전과 현재 버전을 비교해, 다를 때만 민트 배너를 출력한다.
+  const update = getUpdateInfo(version, latest);
   if (update.hasUpdate) {
     const bar = accent('  ┃ ');
     console.log(bar + accent(`⬆  Update available  v${update.current} → v${update.latest}`));

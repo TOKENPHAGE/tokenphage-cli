@@ -93,17 +93,6 @@ export function clearLastSyncDate() {
   saveConfig(rest);
 }
 
-/** 업데이트 캐시(npm 최신버전·마지막 조회시각)를 반환한다. 없으면 각각 null. */
-export function getUpdateCache() {
-  const cfg = loadConfig();
-  return { latestVersion: cfg.latestVersion ?? null, lastUpdateCheck: cfg.lastUpdateCheck ?? null };
-}
-
-/** npm 최신버전과 조회시각(ISO)을 다른 설정을 보존한 채 갱신 저장한다. */
-export function saveUpdateCache(latestVersion, lastUpdateCheck) {
-  saveConfig({ ...loadConfig(), latestVersion, lastUpdateCheck });
-}
-
 // Gist 소유권 검증용 파일명 — 사용자가 이 이름으로 Gist를 만들어야 한다.
 export const VERIFICATION_FILE = 'tokenphage.txt';
 
