@@ -187,8 +187,6 @@ test('normalizeConfig_정상전체_모두보존및버전스탬프', () => {
     hookInstalled: true,
     hookInstalledAt: '2026-06-27T08:09:55.569Z',
     hookMeta: { platform: 'darwin' },
-    latestVersion: '2026.7.0',
-    lastUpdateCheck: '2026-07-09T14:34:07.236Z',
     claudePaths: ['~/.claude'],
   };
   // When
@@ -216,9 +214,7 @@ test('normalizeConfig_각필드개별손상_해당필드만제거_유효필드�
     { field: 'deviceId', bad: 'not-uuid' },
     { field: 'lastSyncDate', bad: 12345 },
     { field: 'hookInstalledAt', bad: 'nope' },
-    { field: 'lastUpdateCheck', bad: 'nope' },
     { field: 'hookInstalled', bad: 'yes' },
-    { field: 'latestVersion', bad: 123 },
     { field: 'claudePaths', bad: 'x' },
     { field: 'hookMeta', bad: [] },
   ];

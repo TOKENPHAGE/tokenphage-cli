@@ -84,9 +84,7 @@ export function normalizeConfig(raw, today) {
   dropIf('deviceId', isUuid);                         // 없으면 getOrCreateDeviceId가 재발급
   dropIf('lastSyncDate', (v) => isYmdDate(v, today)); // 없으면 전체 재파싱
   dropIf('hookInstalledAt', isIsoDate);
-  dropIf('lastUpdateCheck', isIsoDate);
   dropIf('hookInstalled', (v) => typeof v === 'boolean');
-  dropIf('latestVersion', (v) => typeof v === 'string');
   dropIf('claudePaths', isStringArray);
   dropIf('hookMeta', (v) => v != null && typeof v === 'object' && !Array.isArray(v));
 
