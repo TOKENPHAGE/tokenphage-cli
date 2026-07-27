@@ -1,0 +1,31 @@
+name: CI
+
+# npm test 실행 설정
+on:
+  push:
+    branches: [main, develop]      # 대상 브랜치
+  pull_request:
+
+# 같은 ref 중복 실행 취소
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: Unit Tests (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['20', '22', '24']   # 지원 Node 버전
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm               # 의존성 캐시
+
+      - run: npm ci                # 의존성 설치
+      - run: npm test              # 테스트 실행

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { join, resolve } from 'path';
-import { resolveClaudeDirs } from '../src/lib/paths.js';
+import { resolveClaudeDirs, resolveOpencodeDirs } from '../src/lib/paths.js';
 
 // 테스트 목록
 // 1. resolveClaudeDirs_기본입력_기본과XDG순서보장            (성공)
@@ -69,4 +69,47 @@ test('resolveClaudeDirs_비배열customPaths_무시', () => {
   assert.equal(asString.length, 2);
   assert.equal(withJunk.length, 3);
   assert.equal(withJunk[2], resolve('/ok/path'));
+});
+
+// resolveOpencodeDirs 테스트 목록
+// 1. resolveOpencodeDirs_기본입력_XDGdata하위opencode           (성공)
+// 2. resolveOpencodeDirs_XDG_DATA_HOME지정_지정경로사용         (성공)
+// 3. resolveOpencodeDirs_커스텀경로_틸드확장및기본과중복제거     (경계)
+// 4. resolveOpencodeDirs_비배열customPaths_무시                 (실패 입력)
+
+test('resolveOpencodeDirs_기본입력_XDGdata하위opencode', () => {
+  // Given / When: XDG_DATA_HOME 미설정
+  const dirs = resolveOpencodeDirs({ home: HOME });
+
+  // Then: ~/.local/share/opencode 하나 (Claude와 달리 data home 기준)
+  assert.deepEqual(dirs, [resolve(join(HOME, '.local', 'share', 'opencode'))]);
+});
+
+test('resolveOpencodeDirs_XDG_DATA_HOME지정_지정경로사용', () => {
+  // Given / When
+  const dirs = resolveOpencodeDirs({ home: HOME, xdgDataHome: '/xdg/data' });
+
+  // Then: 지정 data home 하위 opencode
+  assert.deepEqual(dirs, [resolve('/xdg/data/opencode')]);
+});
+
+test('resolveOpencodeDirs_커스텀경로_틸드확장및기본과중복제거', () => {
+  // Given: 커스텀에 틸드 경로 + 기본과 동일한 경로(중복)
+  const dirs = resolveOpencodeDirs({ home: HOME, customPaths: ['~/oc-backup', `${HOME}/.local/share/opencode`] });
+
+  // Then: 기본 → 틸드확장 커스텀 순, 기본과 겹치는 커스텀은 제거
+  assert.deepEqual(dirs, [
+    resolve(join(HOME, '.local', 'share', 'opencode')),
+    resolve(join(HOME, 'oc-backup')),
+  ]);
+});
+
+test('resolveOpencodeDirs_비배열customPaths_무시', () => {
+  // Given / When: 비배열과 잡음 섞인 배열
+  const asString = resolveOpencodeDirs({ home: HOME, customPaths: '/nope' });
+  const withJunk = resolveOpencodeDirs({ home: HOME, customPaths: ['', 7, null, '/ok'] });
+
+  // Then: 비배열은 무시(기본 1개), 배열 내 비문자열·공백은 걸러짐(기본 + /ok)
+  assert.equal(asString.length, 1);
+  assert.deepEqual(withJunk, [resolve(join(HOME, '.local', 'share', 'opencode')), resolve('/ok')]);
 });

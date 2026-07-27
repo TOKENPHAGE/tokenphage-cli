@@ -2,7 +2,8 @@ import { glob } from 'glob';
 import { homedir } from 'os';
 import { parseClaudeFiles } from './parsers/claude.js';
 import { parseCodexFiles } from './parsers/codex.js';
-import { resolveClaudeDirs } from './lib/paths.js';
+import { parseOpencodeFiles } from './parsers/opencode.js';
+import { resolveClaudeDirs, resolveOpencodeDirs } from './lib/paths.js';
 import { getCustomClaudePaths } from './auth.js';
 
 /**
@@ -41,6 +42,14 @@ export function claudeDirCandidates() {
   });
 }
 
+/** opencode 데이터 디렉터리 후보(XDG data home 기준)를 우선순위 순으로 반환한다. */
+export function opencodeDirCandidates() {
+  return resolveOpencodeDirs({
+    home: homedir(),
+    xdgDataHome: process.env.XDG_DATA_HOME,
+  });
+}
+
 export async function parseAll(fromDate = null) {
   // 경로가 겹쳐도 파일 간 first-wins dedup이 흡수하므로 순서만 보장하면 된다.
   const claudeFiles = [];
@@ -55,9 +64,19 @@ export async function parseAll(fromDate = null) {
     ...(await globSorted(`${codexHome}/archived_sessions/**/*.jsonl`)),
   ];
 
-  const [claudeEntries, codexEntries] = await Promise.all([
+  // opencode는 message(모델·시각)와 part(step-finish 토큰)를 모두 읽어야 조인할 수 있다.
+  // parseOpencodeFiles가 내용으로 분류하므로 두 목록을 합쳐 넘긴다(순서 무관).
+  const opencodeFiles = [];
+  for (const dir of opencodeDirCandidates()) {
+    const base = dir.replaceAll('\\', '/');
+    opencodeFiles.push(...await globSorted(`${base}/storage/message/**/*.json`));
+    opencodeFiles.push(...await globSorted(`${base}/storage/part/**/*.json`));
+  }
+
+  const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
     parseClaudeFiles(claudeFiles),
     parseCodexFiles(codexFiles),
+    parseOpencodeFiles(opencodeFiles),
   ]);
-  return aggregateRecords([...claudeEntries, ...codexEntries], fromDate);
+  return aggregateRecords([...claudeEntries, ...codexEntries, ...opencodeEntries], fromDate);
 }
