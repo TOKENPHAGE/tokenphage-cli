@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { parseClaudeFiles } from '../src/parsers/claude.js';
 import { parseCodexFiles } from '../src/parsers/codex.js';
+import { parseOpencodeFiles } from '../src/parsers/opencode.js';
 import { aggregateRecords } from '../src/parser.js';
 
 // 테스트 목록
@@ -13,8 +14,10 @@ import { aggregateRecords } from '../src/parser.js';
 // 3. 두파서_출력키집합_완전히동일                              (parity 핵심)
 // 4. aggregateRecords_두파서혼합입력_6키유지및숫자값            (경계)
 // 5. aggregateRecords_동일날짜모델_병합후에도6키집합            (경계)
+// 6. parseOpencodeFiles_출력레코드_정확히6키집합                (성공)
+// 7. 세파서_출력키집합_완전히동일                              (parity 핵심 — opencode 포함)
 //
-// CLI→API 계약(POST /api/sync records)은 Claude/Codex 두 파서가 동일한 6키 레코드를 낼 때만
+// CLI→API 계약(POST /api/sync records)은 Claude/Codex/opencode 세 파서가 동일한 6키 레코드를 낼 때만
 // 성립한다. 한 파서에만 토큰 필드를 추가/개명하면 다른 파서·aggregateRecords 초기값과 조용히
 // 어긋난다(스킬의 sandbox/production parity에 대응하는 회귀). 이 테스트가 그 계약을 못박는다.
 
@@ -167,4 +170,54 @@ test('aggregateRecords_동일날짜모델_병합후에도6키집합', async () =
   assert.ok(merged);
   assert.deepEqual(keysOf(merged), RECORD_KEYS);
   assert.equal(agg.filter((r) => r.model === 'shared-model').length, 1);
+});
+
+/** opencode 픽스처: message(모델·시각) + step-finish part(토큰). parseOpencodeFiles가 둘을 조인한다. */
+function writeJson(obj) {
+  const file = join(dir, `fixture-${seq++}.json`);
+  writeFileSync(file, JSON.stringify(obj));
+  return file;
+}
+function opencodeFixture({ id = 'oc1', model = 'claude-sonnet-4-5', input = 100, output = 50, reasoning = 0, cacheRead = 20, cacheWrite = 10 } = {}) {
+  return [
+    writeJson({ role: 'assistant', id, modelID: model, time: { created: Date.parse(TS) } }),
+    writeJson({ type: 'step-finish', messageID: id, sessionID: 's', tokens: { input, output, reasoning, cache: { read: cacheRead, write: cacheWrite } } }),
+  ];
+}
+
+test('parseOpencodeFiles_출력레코드_정확히6키집합', async () => {
+  // Given: opencode 메시지 + step-finish part
+  const files = opencodeFixture();
+
+  // When
+  const entries = await parseOpencodeFiles(files);
+
+  // Then: 모든 레코드가 정확히 6키 계약을 가진다 (cacheCreateTok 포함)
+  assert.ok(entries.length >= 1);
+  for (const e of entries) {
+    assert.deepEqual(keysOf(e), RECORD_KEYS);
+  }
+});
+
+test('세파서_출력키집합_완전히동일', async () => {
+  // Given: 세 파서로 각각 최소 1건 생성
+  const claudeFile = writeJsonl([claudeLine({ id: 'm9', requestId: 'r9' })]);
+  const codexFile = writeJsonl([
+    codexSessionMeta('sess_9'),
+    codexTurnContext(),
+    codexTokenCount(codexUsage(1000, 600, 50), codexUsage(1000, 600, 50)),
+  ]);
+  const opencodeFiles = opencodeFixture({ id: 'oc9' });
+
+  // When
+  const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
+    parseClaudeFiles([claudeFile]),
+    parseCodexFiles([codexFile]),
+    parseOpencodeFiles(opencodeFiles),
+  ]);
+
+  // Then: 세 파서의 레코드 키 집합이 서로, 그리고 계약과 완전히 동일하다
+  assert.deepEqual(keysOf(claudeEntries[0]), RECORD_KEYS);
+  assert.deepEqual(keysOf(codexEntries[0]), RECORD_KEYS);
+  assert.deepEqual(keysOf(opencodeEntries[0]), RECORD_KEYS);
 });

@@ -136,7 +136,7 @@ async function runSync() {
   const lastSyncDate = getLastSyncDate();
   const fromDate = lastSyncDate ?? null;
 
-  console.log(`Parsing local JSONL... (${fromDate ?? 'beginning'} ~ ${today})`);
+  console.log(`Parsing local logs... (${fromDate ?? 'beginning'} ~ ${today})`);
   const records = await parseAll(fromDate);
   console.log(`${records.length} records aggregated (date×model)`);
   if (records.length === 0) {
@@ -293,9 +293,9 @@ program.command('login [username]')
     }
   });
 
-// sync: 로컬 Claude/Codex 로그를 파싱해 서버로 업로드한다(배지 갱신). 미인증이면 안내 후 종료.
+// sync: 로컬 Claude Code/Codex/opencode 로그를 파싱해 서버로 업로드한다(배지 갱신). 미인증이면 안내 후 종료.
 program.command('sync')
-  .description('Sync local Claude Code token usage to the server')
+  .description('Sync local token usage (Claude Code, Codex, opencode) to the server')
   .action(async () => {
     try { await runSync(); }
     catch (err) { showError('Sync failed', err.message); process.exitCode = 1; }
