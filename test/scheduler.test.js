@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildSyncPs1, buildTaskXml, buildCronBlock, removeCronBlock, upsertCronContent, CRON_BEGIN, CRON_END } from '../src/scheduler.js';
+import { buildSyncPs1, buildTaskXml, buildCronBlock, removeCronBlock, upsertCronContent, classifyLaunchctlProbe, CRON_BEGIN, CRON_END } from '../src/scheduler.js';
 
 // 순수 빌더만 검증한다 — schtasks/launchctl 호출이나 파일 쓰기가 없어 OS 무관하게 돈다.
 
@@ -221,6 +221,22 @@ test('removeCronBlock — END 없는 고아 BEGIN이면 삭제 없이 사용자 
   assert.match(out, /\/usr\/bin\/critical-backup/);
 });
 
+// ─── classifyLaunchctlProbe ──────────────────────────────────────────────────
+// 테스트 목록:
+//  1. classifyLaunchctlProbe_종료코드별_113만미등록으로판정 (성공/경계)
+
+test('classifyLaunchctlProbe — 113만 확정 미등록이고 나머지는 판정 불가다', () => {
+  // Given / When / Then: 113(서비스 없음)만 재등록 대상이다.
+  assert.equal(classifyLaunchctlProbe({ status: 113 }), 'missing');
+
+  // 112(도메인 없음 — SSH 등)는 예약이 살아있을 수 있어 건드리면 안 된다.
+  assert.equal(classifyLaunchctlProbe({ status: 112 }), 'unknown');
+
+  // launchctl 자체가 없거나 timeout(SIGTERM → status null)이면 판정할 수 없다.
+  assert.equal(classifyLaunchctlProbe({ code: 'ENOENT' }), 'unknown');
+  assert.equal(classifyLaunchctlProbe({ status: null, signal: 'SIGTERM' }), 'unknown');
+});
+
 // ─── export 가드 ─────────────────────────────────────────────────────────────
 
 test('순수 빌더가 함수로 export되어 테스트 가능하다', () => {
@@ -229,4 +245,5 @@ test('순수 빌더가 함수로 export되어 테스트 가능하다', () => {
   assert.equal(typeof buildCronBlock, 'function');
   assert.equal(typeof removeCronBlock, 'function');
   assert.equal(typeof upsertCronContent, 'function');
+  assert.equal(typeof classifyLaunchctlProbe, 'function');
 });

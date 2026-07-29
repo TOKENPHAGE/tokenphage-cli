@@ -6,9 +6,10 @@
  */
 import { Command } from 'commander';
 import { parseAll } from './parser.js';
-import { loadToken, saveToken, getOrCreateDeviceId, gistLogin, setHookInstalled, getLastSyncDate, saveLastSyncDate, clearLastSyncDate } from './auth.js';
+import { loadConfig, loadToken, saveToken, getOrCreateDeviceId, gistLogin, setHookInstalled, getLastSyncDate, saveLastSyncDate, clearLastSyncDate } from './auth.js';
 import { syncRecords, resetData } from './sync.js';
 import { installHook, uninstallHook } from './scheduler.js';
+import { reconcileHookRegistration } from './hook-reconcile.js';
 import { promptFirstRun, promptDashboard, promptAdvanced, confirmReset, pauseForEnter, showError } from './ui.js';
 import { accent } from './gradient.js';
 import { localDateOf } from './lib/dates.js';
@@ -239,14 +240,14 @@ program.action(async () => {
       }
     }
 
-    // 인증 이후 메뉴는 최신 설정이 필요하므로 여기서 동적 import (상단 정적 import과 별개)
-    const { loadConfig } = await import('./auth.js');
     // TUI 진입 시 npm 최신버전을 1회 조회(짧은 타임아웃). 세션 동안 재사용해 배너/메뉴에 반영한다.
     const latest = await checkLatestVersion();
+    // 대시보드 진입 전 1회: 설정만 켜져 있고 OS 스케줄러에서 사라졌으면 여기서 되살린다.
+    const hookUnverified = await reconcileHookRegistration();
     // 대시보드 루프: 액션 수행 후 메인으로 복귀, Exit/Esc 에서만 종료
     while (true) {
       const cfg = loadConfig();
-      const action = await promptDashboard(cfg, latest);
+      const action = await promptDashboard(cfg, latest, hookUnverified);
       if (action === 'exit') break;
       if (action === 'sync') await runSync();
       else if (action === 'install-hook') await runInstallHook();

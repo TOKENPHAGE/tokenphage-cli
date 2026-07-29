@@ -129,9 +129,10 @@ export async function promptFirstRun() {
  * 인증된 사용자를 위한 대시보드 메뉴.
  * @param {{ token: string, lastSyncDate: string|null, hookInstalled: boolean, hookMeta: object|null }} cfg
  * @param {string|null} latest TUI 진입 시 조회한 npm 최신버전(조회 실패/옵트아웃 시 null)
+ * @param {boolean} [hookUnverified] OS 스케줄러 등록 여부를 확인할 수 없었으면 true
  * @returns {'update' | 'sync' | 'install-hook' | 'uninstall-hook' | 'advanced' | 'exit'}
  */
-export async function promptDashboard(cfg, latest) {
+export async function promptDashboard(cfg, latest, hookUnverified = false) {
   printWelcome();
 
   // TUI 진입 시 조회한 npm 최신버전과 현재 버전을 비교해, 다를 때만 민트 배너를 출력한다.
@@ -145,9 +146,14 @@ export async function promptDashboard(cfg, latest) {
 
   const username = decodeJwtUsername(cfg.token) ?? '(unknown)';
   const lastSync = cfg.lastSyncDate ?? 'never';
-  const hookStatus = cfg.hookInstalled
-    ? chalk.green('  Auto-sync enabled') + chalk.gray(` (${cfg.hookMeta?.scheduleSpec ?? 'daily 04:00'})`)
-    : chalk.yellow('  Auto-sync not configured');
+  // 설정 상태를 먼저 보고, 켜진 경우에만 검증 결과를 반영한다
+  // (순서를 뒤집으면 방금 auto-sync를 끈 사용자에게도 "enabled"가 남는다).
+  // 등록을 확인하지 못했거나 재등록이 실패했으면 초록으로 단정하지 않고 노랑으로 유보한다.
+  const hookStatus = !cfg.hookInstalled
+    ? chalk.yellow('  Auto-sync not configured')
+    : hookUnverified
+      ? chalk.yellow('  Auto-sync enabled') + chalk.gray(' (could not verify — see message above)')
+      : chalk.green('  Auto-sync enabled') + chalk.gray(` (${cfg.hookMeta?.scheduleSpec ?? 'daily 04:00'})`);
 
   console.log(chalk.green('  Authenticated as ') + chalk.bold(`@${username}`));
   console.log(chalk.gray(`  Last sync: ${lastSync}`));
