@@ -29,3 +29,17 @@ jobs:
 
       - run: npm ci                # 의존성 설치
       - run: npm test              # 테스트 실행
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'         # 커버리지 임계 플래그 지원
+          cache: npm
+
+      - run: npm ci                  # 의존성 설치
+      - run: npm run test:coverage   # 로직 코어 80% 미만이면 실패

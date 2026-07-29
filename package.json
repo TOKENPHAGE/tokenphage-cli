@@ -19,7 +19,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "cross-env TOKENPHAGE_API=http://localhost:8080 node src/index.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude='test/**' --test-coverage-exclude='src/index.js' --test-coverage-exclude='src/ui.js' --test-coverage-exclude='src/animated-select.js' --test-coverage-exclude='src/gradient.js' --test-coverage-exclude='src/auth.js' --test-coverage-exclude='src/scheduler.js' --test-coverage-exclude='src/parser.js' --test-coverage-lines=80 --test-coverage-functions=80 test/*.test.js"
   },
   "dependencies": {
     "@inquirer/prompts": "^8.5.0",
