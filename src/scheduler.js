@@ -493,10 +493,11 @@ function hasCrontab() {
 // 현재 사용자 crontab 전체를 반환한다. '확정된 빈 crontab'만 ''로 취급하고,
 // 그 외 읽기 실패는 fail-closed로 throw한다 — 이 값이 crontab 전체 재기록의 base가
 // 되므로, 애매한 실패를 ''로 흡수하면 사용자의 기존 항목을 통째로 덮어쓸 수 있다.
-function readCrontab() {
+// run/timeout은 조회 경로와 테스트를 위한 주입 지점이다 — 기본값이 실제 동작이라 설치 경로는 그대로다.
+function readCrontab(run = execFileSync, timeout = undefined) {
   try {
     // maxBuffer 상향: 대형(정상) crontab이 기본 1MB를 넘겨 ENOBUFS로 오인 실패하는 것을 막는다.
-    return execFileSync('crontab', ['-l'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+    return run('crontab', ['-l'], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout });
   } catch (err) {
     // 빈 crontab: exit≠0 + stderr 'no crontab for <user>' → 이때만 빈 문자열(잃을 항목 없음).
     const stderr = (err.stderr?.toString() || '').toLowerCase();
@@ -586,6 +587,68 @@ function uninstallLinux() {
     try { unlinkSync(wrapper); removed = true; } catch { /* noop */ }
   }
   return { platform: 'linux', removed };
+}
+
+// ─── 등록 상태 조회 ───────────────────────────────────────────────────────────
+
+// 조회가 멈추면 CLI 진입이 그대로 블로킹된다 (update-check.js의 FETCH_TIMEOUT_MS와 같은 이유).
+const PROBE_TIMEOUT_MS = 3000;
+
+/**
+ * launchctl 실패를 등록 상태로 분류한다. 113(서비스 없음)만 확정적 미등록이며,
+ * 112(도메인 없음 — SSH 등 비 GUI 세션)·ENOENT(명령 부재)·timeout(SIGTERM)은 판정 불가다.
+ * 판정 불가를 미등록으로 오해하면 살아있는 예약에 재등록을 걸어 bootout으로 내려버린다.
+ * @returns {'missing'|'unknown'}
+ */
+export function classifyLaunchctlProbe(err) {
+  return err?.status === 113 ? 'missing' : 'unknown';
+}
+
+// 설치가 bootstrap gui/<uid>이므로 조회도 같은 도메인을 명시한다.
+// launchctl list는 호출자의 암묵 도메인만 조회해 비 GUI 세션에서 오탐한다.
+function probeMac(run) {
+  const uid = userInfo().uid;
+  try {
+    run('launchctl', ['print', `gui/${uid}/${TASK_LABEL}`],
+      { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS });
+    return 'registered';
+  } catch (err) {
+    return classifyLaunchctlProbe(err);
+  }
+}
+
+// 종료코드만 판정 근거로 쓴다 — 출력 메시지는 현지화·OEM 코드페이지 탓에 파싱할 수 없다.
+function probeWindows(run) {
+  try {
+    run('schtasks', ['/Query', '/TN', WIN_TASK_NAME],
+      { stdio: 'ignore', timeout: PROBE_TIMEOUT_MS, windowsHide: true });
+    return 'registered';
+  } catch (err) {
+    return err.status === 1 ? 'missing' : 'unknown';
+  }
+}
+
+// readCrontab()을 재사용하고 그 함수의 fail-closed throw만 판정 불가로 흡수한다
+// 조회는 CLI 시작을 블로킹하므로 설치 경로와 달리 타임아웃을 반드시 건넨다.
+function probeLinux(run) {
+  try {
+    return readCrontab(run, PROBE_TIMEOUT_MS).includes(CRON_BEGIN) ? 'registered' : 'missing';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
+ * 자동 sync 스케줄이 OS 스케줄러에 실제로 등록돼 있는지 조회한다(읽기 전용).
+ * 라벨·작업명은 완전 일치로만 찾는다 — 같은 홈에 다른 dev.tokenphage.* 작업이 있을 수 있다.
+ * @param {{ platform?: string, run?: Function }} [deps]
+ * @returns {'registered'|'missing'|'unknown'}
+ */
+export function probeHookRegistration({ platform = process.platform, run = execFileSync } = {}) {
+  if (platform === 'darwin') return probeMac(run);
+  if (platform === 'win32') return probeWindows(run);
+  if (platform === 'linux') return probeLinux(run);
+  return 'unknown'; // 미지원 OS는 throw 대신 판정 불가 — 조회 실패로 CLI가 죽지 않게 한다.
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────

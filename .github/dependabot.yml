@@ -1,0 +1,16 @@
+# 의존성 자동 업데이트 PR
+version: 2
+updates:
+  - package-ecosystem: npm             # package.json 의존성
+    directory: "/"
+    schedule:
+      interval: weekly                 # 주 1회 점검
+    open-pull-requests-limit: 5        # 동시 PR 상한
+    groups:
+      minor-patch:                     # 마이너·패치는 한 PR로 묶음
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions  # 워크플로 액션 버전
+    directory: "/"
+    schedule:
+      interval: weekly
