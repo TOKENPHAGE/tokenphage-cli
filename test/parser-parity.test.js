@@ -1,10 +1,12 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
+import Database from 'better-sqlite3';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { parseClaudeFiles } from '../src/parsers/claude.js';
 import { parseCodexFiles } from '../src/parsers/codex.js';
+import { parseHermesSessions } from '../src/parsers/hermes.js';
 import { parseOpencodeFiles } from '../src/parsers/opencode.js';
 import { aggregateRecords } from '../src/parser.js';
 
@@ -15,9 +17,9 @@ import { aggregateRecords } from '../src/parser.js';
 // 4. aggregateRecords_두파서혼합입력_6키유지및숫자값            (경계)
 // 5. aggregateRecords_동일날짜모델_병합후에도6키집합            (경계)
 // 6. parseOpencodeFiles_출력레코드_정확히6키집합                (성공)
-// 7. 세파서_출력키집합_완전히동일                              (parity 핵심 — opencode 포함)
+// 7. 네파서_출력키집합_완전히동일                              (parity 핵심 — Hermes 포함)
 //
-// CLI→API 계약(POST /api/sync records)은 Claude/Codex/opencode 세 파서가 동일한 6키 레코드를 낼 때만
+// CLI→API 계약(POST /api/sync records)은 Claude/Codex/Hermes/opencode 네 파서가 동일한 6키 레코드를 낼 때만
 // 성립한다. 한 파서에만 토큰 필드를 추가/개명하면 다른 파서·aggregateRecords 초기값과 조용히
 // 어긋난다(스킬의 sandbox/production parity에 대응하는 회귀). 이 테스트가 그 계약을 못박는다.
 
@@ -199,8 +201,8 @@ test('parseOpencodeFiles_출력레코드_정확히6키집합', async () => {
   }
 });
 
-test('세파서_출력키집합_완전히동일', async () => {
-  // Given: 세 파서로 각각 최소 1건 생성
+test('네파서_출력키집합_완전히동일', async () => {
+  // Given: 네 파서로 각각 최소 1건 생성
   const claudeFile = writeJsonl([claudeLine({ id: 'm9', requestId: 'r9' })]);
   const codexFile = writeJsonl([
     codexSessionMeta('sess_9'),
@@ -208,16 +210,30 @@ test('세파서_출력키집합_완전히동일', async () => {
     codexTokenCount(codexUsage(1000, 600, 50), codexUsage(1000, 600, 50)),
   ]);
   const opencodeFiles = opencodeFixture({ id: 'oc9' });
+  const hermesDbPath = join(dir, `hermes-parity-${seq++}.db`);
+  const hermesDb = new Database(hermesDbPath);
+  hermesDb.exec(`
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, model TEXT, started_at REAL, ended_at REAL,
+      input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, cache_write_tokens INTEGER
+    )
+  `);
+  hermesDb.prepare(`
+    INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('hermes_1', 'gpt-5.6-terra', 1785806000, 1785806458, 1000, 50, 600, 0);
+  hermesDb.close();
 
   // When
-  const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
+  const [claudeEntries, codexEntries, hermesEntries, opencodeEntries] = await Promise.all([
     parseClaudeFiles([claudeFile]),
     parseCodexFiles([codexFile]),
+    parseHermesSessions(hermesDbPath),
     parseOpencodeFiles(opencodeFiles),
   ]);
 
-  // Then: 세 파서의 레코드 키 집합이 서로, 그리고 계약과 완전히 동일하다
+  // Then: 네 파서의 레코드 키 집합이 서로, 그리고 계약과 완전히 동일하다
   assert.deepEqual(keysOf(claudeEntries[0]), RECORD_KEYS);
   assert.deepEqual(keysOf(codexEntries[0]), RECORD_KEYS);
+  assert.deepEqual(keysOf(hermesEntries[0]), RECORD_KEYS);
   assert.deepEqual(keysOf(opencodeEntries[0]), RECORD_KEYS);
 });
