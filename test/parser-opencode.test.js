@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseOpencodeFiles } from '../src/parsers/opencode.js';
+import { parseOpencodeDatabase, parseOpencodeFiles, parseOpencodeRows } from '../src/parsers/opencode.js';
 import { aggregateRecords } from '../src/parser.js';
 import { localDateOf } from '../src/lib/dates.js';
 
@@ -357,5 +357,50 @@ describe('정규화 — 값 보정 후 포함', () => {
     assert.equal(entries.length, 1);
     assert.equal(entries[0].cacheReadTok, 0);
     assert.equal(entries[0].cacheCreateTok, 0);
+  });
+});
+
+describe('SQLite 저장소', () => {
+  test('parseOpencodeRows_DB컬럼을기존토큰계약으로매핑', () => {
+    const entries = parseOpencodeRows([{
+      date: '2026-06-10',
+      model: 'claude-sonnet-4-6',
+      input: 400,
+      output: 300,
+      reasoning: 900,
+      cache_read: 500,
+      cache_write: 20,
+    }]);
+
+    assert.deepEqual(entries, [{
+      date: '2026-06-10', model: 'claude-sonnet-4-6',
+      inputTok: 400, outputTok: 1200, cacheReadTok: 500, cacheCreateTok: 20,
+    }]);
+  });
+
+  test('parseOpencodeRows_모델또는날짜가없는행은제외', () => {
+    const entries = parseOpencodeRows([
+      { time_created: TS_MS, model: null, output: 999 },
+      { time_created: null, model: 'bad-time', output: 999 },
+      { time_created: TS_MS, model: 'ok', output: 7 },
+    ]);
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].model, 'ok');
+    assert.equal(entries[0].outputTok, 7);
+  });
+
+  test('parseOpencodeDatabase_공식DB조회결과를파싱', async () => {
+    let called = 0;
+    const entries = await parseOpencodeDatabase(async () => {
+      called += 1;
+      return [{ time_created: TS_MS, model: 'db-model', input: 10, output: 20 }];
+    });
+
+    assert.equal(called, 1);
+    assert.deepEqual(entries[0], {
+      date: localDateOf(TS_MS), model: 'db-model',
+      inputTok: 10, outputTok: 20, cacheReadTok: 0, cacheCreateTok: 0,
+    });
   });
 });

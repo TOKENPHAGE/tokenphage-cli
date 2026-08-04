@@ -1,5 +1,29 @@
-import { readFile } from 'fs/promises';
+import { access, readFile } from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import { homedir } from 'os';
+import { join } from 'path';
 import { localDateOf } from '../lib/dates.js';
+
+const execFileAsync = promisify(execFile);
+
+const USAGE_QUERY = `
+SELECT
+  strftime('%Y-%m-%d', m.time_created / 1000, 'unixepoch', 'localtime') AS date,
+  json_extract(m.data, '$.modelID') AS model,
+  SUM(MAX(COALESCE(json_extract(p.data, '$.tokens.input'), 0), 0)) AS input,
+  SUM(MAX(COALESCE(json_extract(p.data, '$.tokens.output'), 0), 0)) AS output,
+  SUM(MAX(COALESCE(json_extract(p.data, '$.tokens.reasoning'), 0), 0)) AS reasoning,
+  SUM(MAX(COALESCE(json_extract(p.data, '$.tokens.cache.read'), 0), 0)) AS cache_read,
+  SUM(MAX(COALESCE(json_extract(p.data, '$.tokens.cache.write'), 0), 0)) AS cache_write
+FROM message m
+JOIN part p ON p.message_id = m.id
+WHERE json_extract(m.data, '$.role') = 'assistant'
+  AND json_extract(p.data, '$.type') = 'step-finish'
+  AND json_type(p.data, '$.tokens') IS NOT NULL
+  AND json_extract(m.data, '$.modelID') IS NOT NULL
+GROUP BY date, model
+`;
 
 // opencode(sst) 세션 저장 파서.
 // opencode는 턴당 assistant 메시지 1개에 스텝마다 tokens를 덮어써(=) 마지막 스텝만 남기므로,
@@ -24,6 +48,64 @@ function entryOf(date, model, tokens) {
     cacheReadTok: Math.max(cache.read ?? 0, 0),
     cacheCreateTok: Math.max(cache.write ?? 0, 0),
   };
+}
+
+function entryOfRow(row) {
+  if (!row || typeof row.model !== 'string' || !row.model) return null;
+  const date = typeof row.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.date)
+    ? row.date
+    : localDateOf(row.time_created);
+  if (!date) return null;
+  return entryOf(date, row.model, {
+    input: row.input,
+    output: row.output,
+    reasoning: row.reasoning,
+    cache: { read: row.cache_read, write: row.cache_write },
+  });
+}
+
+async function opencodeCommand() {
+  const installed = join(homedir(), '.opencode', 'bin', process.platform === 'win32' ? 'opencode.exe' : 'opencode');
+  try {
+    await access(installed);
+    return installed;
+  } catch {
+    return 'opencode';
+  }
+}
+
+async function queryOpencodeRows() {
+  const command = await opencodeCommand();
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(command, ['db', USAGE_QUERY, '--format', 'json', '--pure'], { maxBuffer: 100 * 1024 * 1024 }));
+  } catch (err) {
+    throw new Error(`Could not read OpenCode database: ${err.message}`);
+  }
+
+  try {
+    const rows = JSON.parse(stdout);
+    if (!Array.isArray(rows)) throw new Error('query result is not an array');
+    return rows;
+  } catch (err) {
+    throw new Error(`Could not parse OpenCode database output: ${err.message}`);
+  }
+}
+
+/** OpenCode SQLite 조회 결과를 tokenphage usage 목록으로 변환한다. */
+export function parseOpencodeRows(rows) {
+  if (!Array.isArray(rows)) return [];
+  const entries = [];
+  for (const row of rows) {
+    const entry = entryOfRow(row);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+/** 현재 OpenCode의 opencode.db를 공식 `opencode db` 명령으로 조회한다. */
+export async function parseOpencodeDatabase(queryRows = queryOpencodeRows) {
+  return parseOpencodeRows(await queryRows());
 }
 
 /**
