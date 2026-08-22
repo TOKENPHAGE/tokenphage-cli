@@ -17,10 +17,10 @@ Claude Code, Codex, opencode의 토큰 사용량을 모아 GitHub README에 붙�
 
 ## 🖼️ 이런 배지가 만들어져요
 
-GitHub README(이미지를 붙일 수 있는 곳이면 어디든)에 아래 한 줄만 넣으면 됩니다. `kobenlys`를 본인 GitHub 아이디로 바꾸세요.
+GitHub README(이미지를 붙일 수 있는 곳이면 어디든)에 아래 한 줄만 넣으면 됩니다. `<your-github-name>`을 본인 GitHub 아이디로 바꾸세요.
 
 ```markdown
-[![TokenPhage](https://api.tokenphage.com/badge/kobenlys)](https://github.com/TOKENPHAGE)
+[![Tokenphage](https://api.tokenphage.com/badge/<your-github-name>)](https://github.com/TOKENPHAGE)
 ```
 
 **결과 ↓**
@@ -33,16 +33,34 @@ GitHub README(이미지를 붙일 수 있는 곳이면 어디든)에 아래 한 
   <tr>
     <td align="center">
       <a href="https://github.com/TOKENPHAGE"><img src="https://api.tokenphage.com/badge/kobenlys?theme=gpu&amp;mode=dark" alt="TokenPhage gpu dark 배지"></a><br/>
-      <code>https://api.tokenphage.com/badge/kobenlys?theme=gpu&amp;mode=dark</code>
+      <code>[![Tokenphage](https://api.tokenphage.com/badge/&lt;your-github-name&gt;?theme=gpu&amp;mode=dark)](https://github.com/TOKENPHAGE)</code>
     </td>
     <td align="center">
       <a href="https://github.com/TOKENPHAGE"><img src="https://api.tokenphage.com/badge/kobenlys?theme=claude&amp;mode=light" alt="TokenPhage claude light 배지"></a><br/>
-      <code>https://api.tokenphage.com/badge/kobenlys?theme=claude&amp;mode=light</code>
+      <code>[![Tokenphage](https://api.tokenphage.com/badge/&lt;your-github-name&gt;?theme=claude&amp;mode=light)](https://github.com/TOKENPHAGE)</code>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><strong>grass-claude · light</strong></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <a href="https://github.com/TOKENPHAGE"><img src="https://api.tokenphage.com/badge/kobenlys?theme=grass-claude" alt="TokenPhage grass-claude light 배지"></a><br/>
+      <code>[![Tokenphage](https://api.tokenphage.com/badge/&lt;your-github-name&gt;?theme=grass-claude)](https://github.com/TOKENPHAGE)</code>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2"><strong>grass-claude · dark</strong></td>
+  </tr>
+  <tr>
+    <td align="center" colspan="2">
+      <a href="https://github.com/TOKENPHAGE"><img src="https://api.tokenphage.com/badge/kobenlys?theme=grass-claude&amp;mode=dark" alt="TokenPhage grass-claude dark 배지"></a><br/>
+      <code>[![Tokenphage](https://api.tokenphage.com/badge/&lt;your-github-name&gt;?theme=grass-claude&amp;mode=dark)](https://github.com/TOKENPHAGE)</code>
     </td>
   </tr>
 </table>
 
-> 🎨 URL 뒤에 옵션을 붙일 수 있어요 — 테마 `?theme=gpu`(기본) 또는 `?theme=claude`, 색상 `?mode=light`(기본) 또는 `?mode=dark`.
+> 🎨 URL 뒤에 옵션을 붙일 수 있어요 — 테마 `?theme=gpu`(기본) · `?theme=claude` · `?theme=grass-claude`, 색상 `?mode=light`(기본) 또는 `?mode=dark`.
 
 ## 📦 설치
 
