@@ -1,7 +1,9 @@
 import { glob } from 'glob';
 import { homedir } from 'os';
+import { join } from 'path';
 import { parseClaudeFiles } from './parsers/claude.js';
 import { parseCodexFiles } from './parsers/codex.js';
+import { parseHermesSessions } from './parsers/hermes.js';
 import { parseOpencodeFiles } from './parsers/opencode.js';
 import { resolveClaudeDirs, resolveOpencodeDirs } from './lib/paths.js';
 import { getCustomClaudePaths } from './auth.js';
@@ -73,10 +75,16 @@ export async function parseAll(fromDate = null) {
     opencodeFiles.push(...await globSorted(`${base}/storage/part/**/*.json`));
   }
 
-  const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
+  // Hermes는 로컬 SQLite state.db에 세션별 토큰 누적치를 저장한다.
+  // HERMES_HOME이 설정된 경우 해당 홈을 우선해 기본 프로필 외 환경도 지원한다.
+  const hermesHome = process.env.HERMES_HOME || join(homedir(), '.hermes');
+  const hermesDbPath = join(hermesHome, 'state.db');
+
+  const [claudeEntries, codexEntries, hermesEntries, opencodeEntries] = await Promise.all([
     parseClaudeFiles(claudeFiles),
     parseCodexFiles(codexFiles),
+    parseHermesSessions(hermesDbPath),
     parseOpencodeFiles(opencodeFiles),
   ]);
-  return aggregateRecords([...claudeEntries, ...codexEntries, ...opencodeEntries], fromDate);
+  return aggregateRecords([...claudeEntries, ...codexEntries, ...hermesEntries, ...opencodeEntries], fromDate);
 }
