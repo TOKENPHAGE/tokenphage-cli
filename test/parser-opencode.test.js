@@ -35,6 +35,7 @@ const TS = '2026-06-10T03:00:00.000Z';
 const TS_MS = Date.parse(TS);                        // 기준일 epoch millis
 const TS2_MS = Date.parse('2026-06-11T03:00:00.000Z'); // 하루 뒤(어느 타임존이든 다른 날짜)
 const OK_MODEL = 'ok-model';
+const OK_DATE = localDateOf(TS_MS);                   // DB 쿼리의 date 별칭과 같은 로컬 날짜
 
 let dir;
 before(() => { dir = mkdtempSync(join(tmpdir(), 'tp-opencode-')); });
@@ -410,16 +411,30 @@ describe('SQLite 저장소', () => {
     }]);
   });
 
+  // 행 shape은 USAGE_QUERY가 내보내는 7개 별칭 그대로다.
+  // date는 strftime 결과이므로 'YYYY-MM-DD' 아니면 NULL(m.time_created가 NULL일 때)이다.
   test('parseOpencodeRows_모델또는날짜가없는행은제외', () => {
     const entries = parseOpencodeRows([
-      { time_created: TS_MS, model: null, output: 999 },
-      { time_created: null, model: 'bad-time', output: 999 },
-      { time_created: TS_MS, model: 'ok', output: 7 },
+      { date: OK_DATE, model: null, output: 999 },
+      { date: null, model: 'bad-time', output: 999 },
+      { date: OK_DATE, model: OK_MODEL, output: 7 },
     ]);
 
     assert.equal(entries.length, 1);
-    assert.equal(entries[0].model, 'ok');
+    assert.equal(entries[0].date, OK_DATE);
+    assert.equal(entries[0].model, OK_MODEL);
     assert.equal(entries[0].outputTok, 7);
+  });
+
+  test('parseOpencodeDatabase_time_created가NULL인메시지_집계에서제외', async () => {
+    // Given: time_created가 NULL이면 strftime이 NULL을 돌려줘 date를 만들 수 없다 + 정상 대조군
+    const dbPath = createUsageDb('null-time.db', [
+      { messageID: 'no_time', modelID: 'skip', timeCreated: null, tokens: { output: 999 } },
+      { messageID: 'ok', modelID: OK_MODEL, timeCreated: TS_MS, tokens: { output: 7 } },
+    ]);
+
+    // When / Then: 귀속할 날짜가 없는 행만 빠진다
+    assertOnlyOk(await parseOpencodeDatabase(dbPath));
   });
 
   test('parseOpencodeDatabase_실제DB를외부CLI없이직접조회', async () => {

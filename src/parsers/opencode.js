@@ -53,13 +53,13 @@ function entryOf(date, model, tokens) {
   };
 }
 
+// USAGE_QUERY가 내보내는 7개 별칭(date·model·input·output·reasoning·cache_read·cache_write)만 읽는다.
+// date는 strftime 결과라 'YYYY-MM-DD' 아니면 NULL이다(m.time_created가 NULL인 경우).
+// 날짜나 모델을 못 만든 행은 어느 날짜·모델에 귀속시킬지 알 수 없으므로 집계에서 뺀다.
 function entryOfRow(row) {
   if (!row || typeof row.model !== 'string' || !row.model) return null;
-  const date = typeof row.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(row.date)
-    ? row.date
-    : localDateOf(row.time_created);
-  if (!date) return null;
-  return entryOf(date, row.model, {
+  if (typeof row.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) return null;
+  return entryOf(row.date, row.model, {
     input: row.input,
     output: row.output,
     reasoning: row.reasoning,
