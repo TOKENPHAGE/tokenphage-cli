@@ -65,20 +65,23 @@ export async function parseAll(fromDate = null) {
   ];
 
   // 최신 opencode는 data home 바로 아래 opencode.db에 저장한다.
+  // DB가 있으면 그 파일만 직접 읽고(구버전에서 마이그레이션된 JSON과의 이중 집계 방지),
   // DB가 없는 구버전만 storage/message·part JSON을 읽는다.
-  const opencodeDatabases = [];
+  let opencodeDatabase = null;
   const opencodeFiles = [];
   for (const dir of opencodeDirCandidates()) {
     const base = dir.replaceAll('\\', '/');
-    opencodeDatabases.push(...await globSorted(`${base}/opencode.db`));
-    if (opencodeDatabases.length === 0) {
+    if (!opencodeDatabase) {
+      [opencodeDatabase = null] = await globSorted(`${base}/opencode.db`);
+    }
+    if (!opencodeDatabase) {
       opencodeFiles.push(...await globSorted(`${base}/storage/message/**/*.json`));
       opencodeFiles.push(...await globSorted(`${base}/storage/part/**/*.json`));
     }
   }
 
-  const opencodePromise = opencodeDatabases.length > 0
-    ? parseOpencodeDatabase()
+  const opencodePromise = opencodeDatabase
+    ? parseOpencodeDatabase(opencodeDatabase)
     : parseOpencodeFiles(opencodeFiles);
 
   const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
