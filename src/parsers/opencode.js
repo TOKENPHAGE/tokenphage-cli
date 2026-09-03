@@ -1,6 +1,5 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
-import Database from 'better-sqlite3';
 import { localDateOf } from '../lib/dates.js';
 
 // opencode(sst) 세션 저장 파서.
@@ -82,9 +81,12 @@ function hasAnyTable(db) {
 // OpenCode가 쓰는 중이어도 WAL 기반이라 읽기는 막히지 않는다.
 // DB 삭제·손상·권한·스키마 변경 등 어떤 실패도 claude/codex sync를 막지 않도록
 // 예외를 올리지 않고 빈 목록으로 격리한다(경고만 남긴다).
-function queryOpencodeRows(dbPath) {
+// better-sqlite3는 네이티브 모듈이라 로드 자체가 실패할 수 있다
+// 정적 import면 그 실패가 CLI 전체를 죽이므로 격리 대상인 이 try 안에서 동적으로 불러온다.
+async function queryOpencodeRows(dbPath) {
   let db;
   try {
+    const { default: Database } = await import('better-sqlite3');
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
     // 기록이 아직 없는 빈 DB는 정상 상태다. 반대로 다른 테이블은 있는데 message/part만
     // 없다면 OpenCode 스키마가 바뀐 것이므로 집계가 0으로 새지 않게 알린다.
