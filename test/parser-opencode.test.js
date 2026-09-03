@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { parseOpencodeFiles } from '../src/parsers/opencode.js';
+import Database from 'better-sqlite3';
+import { parseOpencodeDatabase, parseOpencodeFiles, parseOpencodeRows } from '../src/parsers/opencode.js';
 import { aggregateRecords } from '../src/parser.js';
 import { localDateOf } from '../src/lib/dates.js';
 
@@ -34,6 +35,7 @@ const TS = '2026-06-10T03:00:00.000Z';
 const TS_MS = Date.parse(TS);                        // 기준일 epoch millis
 const TS2_MS = Date.parse('2026-06-11T03:00:00.000Z'); // 하루 뒤(어느 타임존이든 다른 날짜)
 const OK_MODEL = 'ok-model';
+const OK_DATE = localDateOf(TS_MS);                   // DB 쿼리의 date 별칭과 같은 로컬 날짜
 
 let dir;
 before(() => { dir = mkdtempSync(join(tmpdir(), 'tp-opencode-')); });
@@ -71,6 +73,37 @@ function assertOnlyOk(entries) {
   assert.equal(entries.length, 1);
   assert.equal(entries[0].model, OK_MODEL);
   assert.equal(entries[0].outputTok, 7);
+}
+
+// opencode.db와 같은 스키마(message.data / part.data JSON)의 SQLite 파일을 만든다.
+function createUsageDb(name, steps) {
+  const path = join(dir, name);
+  const db = new Database(path);
+  db.exec(`
+    CREATE TABLE message (id TEXT PRIMARY KEY, time_created INTEGER, data TEXT);
+    CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, data TEXT);
+  `);
+  const insertMessage = db.prepare('INSERT OR IGNORE INTO message (id, time_created, data) VALUES (?, ?, ?)');
+  const insertPart = db.prepare('INSERT INTO part (id, message_id, data) VALUES (?, ?, ?)');
+  steps.forEach((step, i) => {
+    const { messageID, modelID, timeCreated, role = 'assistant', partType = 'step-finish', tokens } = step;
+    insertMessage.run(messageID, timeCreated, JSON.stringify({ id: messageID, role, modelID }));
+    insertPart.run(`prt_${i}`, messageID, JSON.stringify({ type: partType, messageID, tokens }));
+  });
+  db.close();
+  return path;
+}
+
+// console.warn을 가로채 경고 발생 여부까지 함께 단언한다.
+async function captureWarnings(fn) {
+  const original = console.warn;
+  const warnings = [];
+  console.warn = (msg) => warnings.push(String(msg));
+  try {
+    return { entries: await fn(), warnings };
+  } finally {
+    console.warn = original;
+  }
 }
 
 describe('성공 — 포함·매핑', () => {
@@ -357,5 +390,161 @@ describe('정규화 — 값 보정 후 포함', () => {
     assert.equal(entries.length, 1);
     assert.equal(entries[0].cacheReadTok, 0);
     assert.equal(entries[0].cacheCreateTok, 0);
+  });
+});
+
+describe('SQLite 저장소', () => {
+  test('parseOpencodeRows_DB컬럼을기존토큰계약으로매핑', () => {
+    const entries = parseOpencodeRows([{
+      date: '2026-06-10',
+      model: 'claude-sonnet-4-6',
+      input: 400,
+      output: 300,
+      reasoning: 900,
+      cache_read: 500,
+      cache_write: 20,
+    }]);
+
+    assert.deepEqual(entries, [{
+      date: '2026-06-10', model: 'claude-sonnet-4-6',
+      inputTok: 400, outputTok: 1200, cacheReadTok: 500, cacheCreateTok: 20,
+    }]);
+  });
+
+  // 행 shape은 USAGE_QUERY가 내보내는 7개 별칭 그대로다.
+  // date는 strftime 결과이므로 'YYYY-MM-DD' 아니면 NULL(m.time_created가 NULL일 때)이다.
+  test('parseOpencodeRows_모델또는날짜가없는행은제외', () => {
+    const entries = parseOpencodeRows([
+      { date: OK_DATE, model: null, output: 999 },
+      { date: null, model: 'bad-time', output: 999 },
+      { date: OK_DATE, model: OK_MODEL, output: 7 },
+    ]);
+
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].date, OK_DATE);
+    assert.equal(entries[0].model, OK_MODEL);
+    assert.equal(entries[0].outputTok, 7);
+  });
+
+  test('parseOpencodeDatabase_time_created가NULL인메시지_집계에서제외', async () => {
+    // Given: time_created가 NULL이면 strftime이 NULL을 돌려줘 date를 만들 수 없다 + 정상 대조군
+    const dbPath = createUsageDb('null-time.db', [
+      { messageID: 'no_time', modelID: 'skip', timeCreated: null, tokens: { output: 999 } },
+      { messageID: 'ok', modelID: OK_MODEL, timeCreated: TS_MS, tokens: { output: 7 } },
+    ]);
+
+    // When / Then: 귀속할 날짜가 없는 행만 빠진다
+    assertOnlyOk(await parseOpencodeDatabase(dbPath));
+  });
+
+  test('parseOpencodeDatabase_실제DB를외부CLI없이직접조회', async () => {
+    // Given: opencode.db와 같은 스키마의 실제 SQLite 파일(OpenCode CLI는 설치되어 있지 않아도 된다)
+    const dbPath = createUsageDb('direct.db', [
+      { messageID: 'm1', modelID: 'db-model', timeCreated: TS_MS, tokens: { input: 400, output: 300, reasoning: 900, cache: { read: 500, write: 20 } } },
+    ]);
+
+    // When
+    const entries = await parseOpencodeDatabase(dbPath);
+
+    // Then: 4필드 매핑(reasoning은 output에 합산)
+    assert.deepEqual(entries, [{
+      date: localDateOf(TS_MS), model: 'db-model',
+      inputTok: 400, outputTok: 1200, cacheReadTok: 500, cacheCreateTok: 20,
+    }]);
+  });
+
+  test('parseOpencodeDatabase_같은날짜모델의여러스텝_DB에서합산', async () => {
+    // Given: 한 메시지에 step-finish part 3개(스텝마다 토큰이 다름)
+    const dbPath = createUsageDb('steps.db', [
+      { messageID: 'm1', modelID: 'db-model', timeCreated: TS_MS, tokens: { input: 100, output: 10 } },
+      { messageID: 'm1', modelID: 'db-model', timeCreated: TS_MS, tokens: { input: 200, output: 20 } },
+      { messageID: 'm1', modelID: 'db-model', timeCreated: TS_MS, tokens: { input: 300, output: 30 } },
+    ]);
+
+    // When
+    const entries = await parseOpencodeDatabase(dbPath);
+
+    // Then: date×model 1건으로 전 스텝 합산(마지막 스텝만이 아님)
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].inputTok, 600);
+    assert.equal(entries[0].outputTok, 60);
+  });
+
+  test('parseOpencodeDatabase_assistant아니거나step_finish아닌행_제외', async () => {
+    // Given: user 메시지·step-finish 아닌 part·tokens 없는 part + 정상 대조군
+    const dbPath = createUsageDb('filtered.db', [
+      { messageID: 'u1', modelID: 'skip', timeCreated: TS_MS, role: 'user', tokens: { output: 999 } },
+      { messageID: 't1', modelID: 'skip', timeCreated: TS_MS, partType: 'text', tokens: { output: 999 } },
+      { messageID: 'n1', modelID: 'skip', timeCreated: TS_MS, tokens: null },
+      { messageID: 'x1', modelID: null, timeCreated: TS_MS, tokens: { output: 999 } },
+      { messageID: 'ok', modelID: OK_MODEL, timeCreated: TS_MS, tokens: { output: 7 } },
+    ]);
+
+    // When / Then
+    assertOnlyOk(await parseOpencodeDatabase(dbPath));
+  });
+
+  // OpenCode 상태(삭제·손상·스키마 변경)가 claude/codex sync를 막으면 안 된다.
+  // parseAll이 Promise.all로 묶기 때문에 여기서 throw하면 다른 source 결과까지 버려진다.
+  // 또한 집계할 기록이 없을 뿐인 상황은 경고 없이 조용히 넘어가야 한다.
+  test('parseOpencodeDatabase_DB없음_경고없이빈목록', async () => {
+    // Given: 존재하지 않는 경로(= 집계할 기록이 없음)
+    const missing = join(dir, 'nope.db');
+    // When
+    const { entries, warnings } = await captureWarnings(() => parseOpencodeDatabase(missing));
+    // Then: OpenCode 미사용자를 시끄럽게 하지 않는다
+    assert.deepEqual(entries, []);
+    assert.deepEqual(warnings, []);
+  });
+
+  test('parseOpencodeDatabase_빈DB_경고없이빈목록', async () => {
+    // Given: 테이블이 하나도 없는 DB(OpenCode 삭제 후 잔존 파일)
+    const path = join(dir, 'empty.db');
+    new Database(path).close();
+    // When
+    const { entries, warnings } = await captureWarnings(() => parseOpencodeDatabase(path));
+    // Then
+    assert.deepEqual(entries, []);
+    assert.deepEqual(warnings, []);
+  });
+
+  test('parseOpencodeDatabase_손상된DB파일_경고와함께빈목록', async () => {
+    // Given: 파일은 남아 있는데 SQLite가 아님 → 사용량이 누락되는 중이므로 알려야 한다
+    const broken = join(dir, 'broken.db');
+    writeFileSync(broken, 'not a sqlite file');
+    // When
+    const { entries, warnings } = await captureWarnings(() => parseOpencodeDatabase(broken));
+    // Then
+    assert.deepEqual(entries, []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /could not read/);
+  });
+
+  test('parseOpencodeDatabase_다른테이블만있음_스키마변경경고', async () => {
+    // Given: 유효한 DB에 테이블은 있으나 message/part가 없음(OpenCode 스키마 변경)
+    const path = join(dir, 'schema.db');
+    const db = new Database(path);
+    db.exec('CREATE TABLE unrelated (id TEXT)');
+    db.close();
+    // When
+    const { entries, warnings } = await captureWarnings(() => parseOpencodeDatabase(path));
+    // Then: 집계가 0으로 새는 것을 조용히 넘기지 않는다
+    assert.deepEqual(entries, []);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /schema changed/);
+  });
+
+  test('parseAll_OpenCodeDB실패_claude와codex집계는정상', async () => {
+    // Given: OpenCode 조회는 실패하고, 다른 source는 정상 항목을 낸 상황
+    const opencodeEntries = await parseOpencodeDatabase(join(dir, 'gone.db'));
+    const claudeLike = { date: '2026-06-10', model: 'claude', inputTok: 5, outputTok: 5, cacheReadTok: 0, cacheCreateTok: 0 };
+    const codexLike = { date: '2026-06-10', model: 'codex', inputTok: 3, outputTok: 3, cacheReadTok: 0, cacheCreateTok: 0 };
+
+    // When: parseAll과 동일하게 합산
+    const records = aggregateRecords([claudeLike, codexLike, ...opencodeEntries]);
+
+    // Then: OpenCode만 빠지고 나머지는 그대로 집계된다
+    assert.equal(records.length, 2);
+    assert.deepEqual(records.map((r) => r.model).sort(), ['claude', 'codex']);
   });
 });
