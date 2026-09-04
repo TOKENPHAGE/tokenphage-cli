@@ -13,11 +13,13 @@ concurrency:
 
 jobs:
   unit-tests:
-    name: Unit Tests (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: Unit Tests (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        # better-sqlite3는 네이티브 모듈이라 플랫폼별 prebuild가 실제로 붙는지 확인해야 한다.
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ['22', '24', '26']   # 지원 Node 버전(engines와 일치)
     steps:
       - uses: actions/checkout@v4
@@ -27,8 +29,19 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm               # 의존성 캐시
 
-      - run: npm ci                # 의존성 설치
-      - run: npm test              # 테스트 실행
+      # npm#9837: lockfile 경로에서 better-sqlite3의 gypfile:false가 무시돼 암묵 node-gyp가 돈다.
+      # prebuild는 압축 해제만으로 로드되므로(lib/binding.js) 스크립트를 건너뛰어도 무해하다.
+      # 이 트리에 install script를 쓰는 의존성은 없다 — 추가하려면 이 플래그를 먼저 재검토할 것.
+      - run: npm ci --ignore-scripts   # 의존성 설치
+      - run: npm test                  # 테스트 실행
+
+      # 실사용자는 lockfile 없는 경로(npm i -g)로 설치한다. CI가 그 경로를 안 보고 있었다.
+      - name: 전역 설치 스모크
+        shell: bash
+        run: |
+          TARBALL=$(npm pack --silent)
+          npm i -g "./$TARBALL"
+          tokenphage --version
 
   coverage:
     name: Coverage
@@ -41,5 +54,5 @@ jobs:
           node-version: '24'         # 커버리지 임계 플래그 지원
           cache: npm
 
-      - run: npm ci                  # 의존성 설치
+      - run: npm ci --ignore-scripts # 의존성 설치 (위 unit-tests 주석 참조)
       - run: npm run test:coverage   # 로직 코어 80% 미만이면 실패
