@@ -13,11 +13,13 @@ concurrency:
 
 jobs:
   unit-tests:
-    name: Unit Tests (Node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    name: Unit Tests (${{ matrix.os }} / Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        # better-sqlite3는 네이티브 모듈이라 플랫폼별 prebuild가 실제로 붙는지 확인해야 한다.
+        os: [ubuntu-latest, macos-latest, windows-latest]
         node: ['22', '24', '26']   # 지원 Node 버전(engines와 일치)
     steps:
       - uses: actions/checkout@v4
