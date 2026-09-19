@@ -29,3 +29,6 @@ coverage/
 # Claude Code 작업 파일(작업 환경 전용 규칙·세션 메타)은 공개하지 않는다.
 .claude/
 CLAUDE.md
+
+# oh-my-claudecode 로컬 상태(세션 산출물)는 공개하지 않는다.
+.omc/
