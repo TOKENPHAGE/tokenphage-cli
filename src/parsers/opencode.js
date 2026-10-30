@@ -83,11 +83,12 @@ function hasAnyTable(db) {
 // 예외를 올리지 않고 빈 목록으로 격리한다(경고만 남긴다).
 // better-sqlite3는 네이티브 모듈이라 로드 자체가 실패할 수 있다
 // 정적 import면 그 실패가 CLI 전체를 죽이므로 격리 대상인 이 try 안에서 동적으로 불러온다.
-async function queryOpencodeRows(dbPath) {
+async function queryOpencodeRows(dbPath, onDatabase = null) {
   let db;
   try {
     const { default: Database } = await import('better-sqlite3');
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    onDatabase?.(db); // 실행시간 수집도 같은 연결로 읽는다(수집기는 예외를 던지지 않는다)
     // 기록이 아직 없는 빈 DB는 정상 상태다. 반대로 다른 테이블은 있는데 message/part만
     // 없다면 OpenCode 스키마가 바뀐 것이므로 집계가 0으로 새지 않게 알린다.
     if (!hasUsageTables(db)) {
@@ -119,10 +120,11 @@ export function parseOpencodeRows(rows) {
 /**
  * opencode.db(SQLite)를 직접 조회해 tokenphage usage 목록으로 변환한다.
  * @param {string} dbPath opencode.db 절대 경로
- * @param {(dbPath: string) => Array<object>} [queryRows] 조회 구현(테스트 주입용)
+ * @param {(dbPath: string, onDatabase?: Function|null) => Array<object>} [queryRows] 조회 구현(테스트 주입용)
+ * @param {((db: object) => void)|null} [onDatabase] 연 DB로 실행시간을 모으는 수집기(예외를 던지지 않아야 한다)
  */
-export async function parseOpencodeDatabase(dbPath, queryRows = queryOpencodeRows) {
-  return parseOpencodeRows(await queryRows(dbPath));
+export async function parseOpencodeDatabase(dbPath, queryRows = queryOpencodeRows, onDatabase = null) {
+  return parseOpencodeRows(await queryRows(dbPath, onDatabase));
 }
 
 /**
