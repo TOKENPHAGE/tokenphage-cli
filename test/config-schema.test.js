@@ -48,6 +48,8 @@ import {
 // 27. normalizeConfig_손상토큰_토큰만제거_나머지보존 (성공: 손상 토큰 제거·유효필드 보존)
 // 28. normalizeConfig_각필드개별손상_해당필드만제거_유효필드보존 (성공: 필드별 드롭 배선 8종)
 // 29. normalizeConfig_불리언false_hookInstalled보존 (경계: false를 없음으로 오취급 금지)
+// 30. normalizeConfig_lastSyncVersion문자열_보존     (성공)
+// 31. normalizeConfig_lastSyncVersion빈값비문자열_제거 (실패 입력·경계: 없는 것으로 처리)
 
 const TODAY = '2026-07-10';
 const VALID_JWT = 'eyJhbGciOiJIUzUxMiJ9.eyJzdWIiOiIxIn0.abc-DEF_123';
@@ -232,4 +234,22 @@ test('normalizeConfig_불리언false_hookInstalled보존', () => {
   const out = normalizeConfig({ hookInstalled: false }, TODAY);
   // Then: false를 없음으로 오취급하지 않고 그대로 보존
   assert.equal(out.hookInstalled, false);
+});
+
+test('normalizeConfig_lastSyncVersion문자열_보존', () => {
+  // Given: 실행시간까지 보낸 CLI 버전
+  const out = normalizeConfig({ token: VALID_JWT, lastSyncVersion: '2026.10.0' }, TODAY);
+  // Then: 그대로 보존
+  assert.equal(out.lastSyncVersion, '2026.10.0');
+});
+
+test('normalizeConfig_lastSyncVersion빈값비문자열_제거', () => {
+  // Given: 빈 문자열과 문자열이 아닌 값들
+  for (const bad of ['', 20261000, null, true, ['2026.10.0'], { v: '2026.10.0' }]) {
+    // When
+    const out = normalizeConfig({ token: VALID_JWT, lastSyncVersion: bad }, TODAY);
+    // Then: 없는 것으로 보고 제거하고 token은 보존
+    assert.equal('lastSyncVersion' in out, false, `${JSON.stringify(bad)}는 제거되어야 함`);
+    assert.equal(out.token, VALID_JWT);
+  }
 });

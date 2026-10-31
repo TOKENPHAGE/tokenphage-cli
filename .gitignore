@@ -32,3 +32,6 @@ CLAUDE.md
 
 # oh-my-claudecode 로컬 상태(세션 산출물)는 공개하지 않는다.
 .omc/
+
+# petri E2E 작업 폴더(SSOT, 테스트, 샌드박스, 실행 기록)는 로컬에만 둔다.
+.petri/

@@ -130,9 +130,10 @@ function resolveIncrement(total, last, previous) {
 /**
  * Codex rollout 파일들을 턴 증분 단위 usage 목록으로 파싱한다.
  * @param {string[]} files JSONL 파일 경로 목록 (정렬된 순서 — sessions를 archived보다 먼저)
+ * @param {((record: object, file: string) => void)|null} [onRecord] 파싱한 줄마다 부르는 수집기(예외를 던지지 않아야 한다)
  * @returns {Promise<Array<{date: string, model: string, inputTok: number, outputTok: number, cacheReadTok: number, cacheCreateTok: number}>>}
  */
-export async function parseCodexFiles(files) {
+export async function parseCodexFiles(files, onRecord = null) {
   const entries = [];
   const seenKeys = new Set(); // 파일 간 replay/복제 dedup
 
@@ -158,6 +159,7 @@ export async function parseCodexFiles(files) {
       if (!line.trim()) continue;
       try {
         const obj = JSON.parse(line);
+        onRecord?.(obj, file);
         const payload = obj.payload;
         if (!payload) continue;
 

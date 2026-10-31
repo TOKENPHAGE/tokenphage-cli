@@ -1,10 +1,8 @@
 import { glob } from 'glob';
 import { homedir } from 'os';
-import { parseClaudeFiles } from './parsers/claude.js';
-import { parseCodexFiles } from './parsers/codex.js';
-import { parseOpencodeDatabase, parseOpencodeFiles } from './parsers/opencode.js';
 import { resolveClaudeDirs, resolveOpencodeDirs } from './lib/paths.js';
 import { getCustomClaudePaths } from './auth.js';
+import { readLogs } from './runtime/read-logs.js';
 
 /**
  * 소스별 파서가 돌려준 항목들을 "날짜|모델" 단위 레코드로 합산한다.
@@ -50,7 +48,8 @@ export function opencodeDirCandidates() {
   });
 }
 
-export async function parseAll(fromDate = null) {
+/** 세 도구의 로그 경로를 기존 탐색 순서대로 찾는다. */
+async function discoverLogPaths() {
   // 경로가 겹쳐도 파일 간 first-wins dedup이 흡수하므로 순서만 보장하면 된다.
   const claudeFiles = [];
   for (const dir of claudeDirCandidates()) {
@@ -80,14 +79,17 @@ export async function parseAll(fromDate = null) {
     }
   }
 
-  const opencodePromise = opencodeDatabase
-    ? parseOpencodeDatabase(opencodeDatabase)
-    : parseOpencodeFiles(opencodeFiles);
+  return { claudeFiles, codexFiles, opencodeDatabase, opencodeFiles };
+}
 
-  const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
-    parseClaudeFiles(claudeFiles),
-    parseCodexFiles(codexFiles),
-    opencodePromise,
-  ]);
-  return aggregateRecords([...claudeEntries, ...codexEntries, ...opencodeEntries], fromDate);
+/**
+ * 로그를 한 번 읽어 토큰 레코드와 실행시간을 함께 계산한다.
+ * @param {{ tokenFrom: string|null, runtimeFrom: string|null }} range YYYY-MM-DD(포함) 또는 null(전체 기간)
+ * @returns {Promise<{ records: Array<{date: string, model: string, inputTok: number, outputTok: number, cacheReadTok: number, cacheCreateTok: number}>,
+ *   runtimes: Array<{ date: string, source: 'claude'|'codex'|'opencode', model: string, runtimeMs: number }>,
+ *   allSourcesRead: boolean, failedSources: string[] }>}
+ */
+export async function parseLogs({ tokenFrom = null, runtimeFrom = null } = {}) {
+  const { entries, runtimes, allSourcesRead, failedSources } = await readLogs(await discoverLogPaths(), runtimeFrom);
+  return { records: aggregateRecords(entries, tokenFrom), runtimes, allSourcesRead, failedSources };
 }
