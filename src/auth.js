@@ -4,6 +4,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { normalizeConfig } from './lib/config-schema.js';
 import { localDateOf } from './lib/dates.js';
+import { apiFetch } from './sync.js';
 
 // 로컬 설정 파일 경로: ~/.tokenphage/config.json (JWT·deviceId·sync 상태 보관)
 const CONFIG_DIR = join(homedir(), '.tokenphage');
@@ -79,18 +80,10 @@ export function getCustomClaudePaths() {
   return Array.isArray(paths) ? paths : [];
 }
 
-/** 마지막 sync 완료 날짜(YYYY-MM-DD)를 반환한다. 없으면 null. */
-export function getLastSyncDate() { return loadConfig().lastSyncDate ?? null; }
-
-/** 마지막 sync 날짜를 저장한다. 다음 sync는 이 날짜 이후만 증분 파싱한다. */
-export function saveLastSyncDate(date) {
-  saveConfig({ ...loadConfig(), lastSyncDate: date });
-}
-
-/** lastSyncDate를 제거해 다음 sync가 전체 히스토리를 재파싱하도록 한다. token/deviceId는 보존. */
-export function clearLastSyncDate() {
-  const { lastSyncDate: _omit, ...rest } = loadConfig();
-  saveConfig(rest);
+/** reset용: lastSyncDate와 lastSyncVersion을 지워 다음 sync가 토큰·실행시간을 처음부터 보내게 한다. 나머지는 보존. */
+export function clearSyncState({ readConfig = loadConfig, writeConfig = saveConfig } = {}) {
+  const { lastSyncDate: _date, lastSyncVersion: _version, ...rest } = readConfig();
+  writeConfig(rest);
 }
 
 // Gist 소유권 검증용 파일명 — 사용자가 이 이름으로 Gist를 만들어야 한다.
@@ -113,8 +106,8 @@ export function parseGistId(input) {
 
 /** url에 JSON body를 POST하고 {ok, status, body}를 반환한다. 응답이 JSON이 아니면 {error: 원문}으로 감싼다. */
 async function postJson(url, body) {
-  // Node 18+ 전역 fetch 사용 (node-fetch 의존성 불필요).
-  const res = await fetch(url, {
+  // 이름표를 붙이고 지원 종료 헤더를 안내하는 공통 요청
+  const res = await apiFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

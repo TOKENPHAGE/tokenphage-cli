@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'fs';
+import { userInfo } from 'os';
 import { probeHookRegistration } from '../src/scheduler.js';
 import { reconcileHookRegistration } from '../src/hook-reconcile.js';
 
@@ -102,7 +103,7 @@ test('probeHookRegistration(mac) — 라벨과 도메인을 완전 일치로 조
   const [{ file, args }] = run.calls;
   assert.equal(file, 'launchctl');
   assert.equal(args[0], 'print');
-  assert.match(args[1], new RegExp(`^gui/\\d+/${TASK_LABEL.replace(/\./g, '\\.')}$`));
+  assert.equal(args[1], `gui/${userInfo().uid}/${TASK_LABEL}`);
 });
 
 test('probeHookRegistration(mac) — 조회에 타임아웃을 지정한다', () => {

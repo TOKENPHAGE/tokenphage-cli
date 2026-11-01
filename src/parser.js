@@ -1,10 +1,8 @@
 import { glob } from 'glob';
 import { homedir } from 'os';
-import { parseClaudeFiles } from './parsers/claude.js';
-import { parseCodexFiles } from './parsers/codex.js';
-import { parseOpencodeFiles } from './parsers/opencode.js';
 import { resolveClaudeDirs, resolveOpencodeDirs } from './lib/paths.js';
 import { getCustomClaudePaths } from './auth.js';
+import { readLogs } from './runtime/read-logs.js';
 
 /**
  * 소스별 파서가 돌려준 항목들을 "날짜|모델" 단위 레코드로 합산한다.
@@ -50,7 +48,8 @@ export function opencodeDirCandidates() {
   });
 }
 
-export async function parseAll(fromDate = null) {
+/** 세 도구의 로그 경로를 기존 탐색 순서대로 찾는다. */
+async function discoverLogPaths() {
   // 경로가 겹쳐도 파일 간 first-wins dedup이 흡수하므로 순서만 보장하면 된다.
   const claudeFiles = [];
   for (const dir of claudeDirCandidates()) {
@@ -64,19 +63,33 @@ export async function parseAll(fromDate = null) {
     ...(await globSorted(`${codexHome}/archived_sessions/**/*.jsonl`)),
   ];
 
-  // opencode는 message(모델·시각)와 part(step-finish 토큰)를 모두 읽어야 조인할 수 있다.
-  // parseOpencodeFiles가 내용으로 분류하므로 두 목록을 합쳐 넘긴다(순서 무관).
+  // 최신 opencode는 data home 바로 아래 opencode.db에 저장한다.
+  // DB가 있으면 그 파일만 직접 읽고(구버전에서 마이그레이션된 JSON과의 이중 집계 방지),
+  // DB가 없는 구버전만 storage/message·part JSON을 읽는다.
+  let opencodeDatabase = null;
   const opencodeFiles = [];
   for (const dir of opencodeDirCandidates()) {
     const base = dir.replaceAll('\\', '/');
-    opencodeFiles.push(...await globSorted(`${base}/storage/message/**/*.json`));
-    opencodeFiles.push(...await globSorted(`${base}/storage/part/**/*.json`));
+    if (!opencodeDatabase) {
+      [opencodeDatabase = null] = await globSorted(`${base}/opencode.db`);
+    }
+    if (!opencodeDatabase) {
+      opencodeFiles.push(...await globSorted(`${base}/storage/message/**/*.json`));
+      opencodeFiles.push(...await globSorted(`${base}/storage/part/**/*.json`));
+    }
   }
 
-  const [claudeEntries, codexEntries, opencodeEntries] = await Promise.all([
-    parseClaudeFiles(claudeFiles),
-    parseCodexFiles(codexFiles),
-    parseOpencodeFiles(opencodeFiles),
-  ]);
-  return aggregateRecords([...claudeEntries, ...codexEntries, ...opencodeEntries], fromDate);
+  return { claudeFiles, codexFiles, opencodeDatabase, opencodeFiles };
+}
+
+/**
+ * 로그를 한 번 읽어 토큰 레코드와 실행시간을 함께 계산한다.
+ * @param {{ tokenFrom: string|null, runtimeFrom: string|null }} range YYYY-MM-DD(포함) 또는 null(전체 기간)
+ * @returns {Promise<{ records: Array<{date: string, model: string, inputTok: number, outputTok: number, cacheReadTok: number, cacheCreateTok: number}>,
+ *   runtimes: Array<{ date: string, source: 'claude'|'codex'|'opencode', model: string, runtimeMs: number }>,
+ *   allSourcesRead: boolean, failedSources: string[] }>}
+ */
+export async function parseLogs({ tokenFrom = null, runtimeFrom = null } = {}) {
+  const { entries, runtimes, allSourcesRead, failedSources } = await readLogs(await discoverLogPaths(), runtimeFrom);
+  return { records: aggregateRecords(entries, tokenFrom), runtimes, allSourcesRead, failedSources };
 }

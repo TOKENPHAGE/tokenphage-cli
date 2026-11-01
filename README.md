@@ -11,7 +11,7 @@ Claude Code, Codex, opencode의 토큰 사용량을 모아 GitHub README에 붙�
 
 ## 📋 요구 사항
 
-- **Node.js 20.17 이상**
+- **Node.js 22.14 이상**
 - macOS 또는 Windows (자동 동기화 사용 시)
 - GitHub 계정
 
