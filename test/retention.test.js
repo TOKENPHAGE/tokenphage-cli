@@ -1,6 +1,6 @@
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { checkClaudeRetention, applyRetentionSetting, FOREVER_DAYS, DEFAULT_CLEANUP_DAYS } from '../src/lib/retention.js';
@@ -17,8 +17,10 @@ import { checkClaudeRetention, applyRetentionSetting, FOREVER_DAYS, DEFAULT_CLEA
 // 6. apply_기존필드보존하며무조건99999_원자쓰기              (성공)
 // 7. apply_손상JSON_수정하지않고false                        (실패 입력)
 // 8. apply_settings없음_새로생성                             (경계)
+// 9. apply_상위폴더없음_폴더만들고생성                       (경계: Claude Code 미사용 환경)
+// 10. apply_상위경로가파일_예외없이false                     (실패 입력)
 // [constants]
-// 9. constants_DEFAULT_CLEANUP_DAYS_기본30                   (성공)
+// 11. constants_DEFAULT_CLEANUP_DAYS_기본30                  (성공)
 
 let root;
 const cleanupDirs = [];
@@ -139,6 +141,34 @@ test('apply_settings없음_새로생성', () => {
   // Then: 필드 하나짜리 JSON 생성
   assert.equal(ok, true);
   assert.equal(JSON.parse(readFileSync(path, 'utf8')).cleanupPeriodDays, FOREVER_DAYS);
+});
+
+test('apply_상위폴더없음_폴더만들고생성', () => {
+  // Given: settings.json의 상위 폴더(.claude)부터 없는 경로 (Claude Code 미사용 환경)
+  const dir = join(root, 'k', '.claude');
+  const path = join(dir, 'settings.json');
+
+  // When
+  const ok = applyRetentionSetting(path);
+
+  // Then: 본인만 접근하는 폴더와 파일을 만들고, 다음 검사에서는 설정이 필요 없다
+  assert.equal(ok, true);
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).cleanupPeriodDays, FOREVER_DAYS);
+  assert.equal(checkClaudeRetention([dir]).needed, false);
+  if (process.platform !== 'win32') assert.equal(statSync(dir).mode & 0o777, 0o700); // Windows는 mode를 무시한다
+});
+
+test('apply_상위경로가파일_예외없이false', () => {
+  // Given: 상위 경로 중간이 일반 파일이라 폴더를 만들 수 없다
+  const blocker = join(root, 'blocker');
+  writeFileSync(blocker, 'x');
+
+  // When
+  const ok = applyRetentionSetting(join(blocker, '.claude', 'settings.json'));
+
+  // Then: 예외 없이 false(호출부가 수동 안내로 간다), 막고 있던 파일은 그대로
+  assert.equal(ok, false);
+  assert.equal(readFileSync(blocker, 'utf8'), 'x');
 });
 
 test('constants_DEFAULT_CLEANUP_DAYS_기본30', () => {

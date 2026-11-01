@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync, renameSync } from 'fs';
-import { join } from 'path';
+import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'fs';
+import { dirname, join } from 'path';
 
 // Claude Code의 cleanupPeriodDays(트랜스크립트 보존 기간) 검사·설정.
 // 규칙은 하나: 99999 이상이면 통과, 아니면 동의를 받아 무조건 99999로 설정한다.
@@ -41,9 +41,9 @@ export function checkClaudeRetention(claudeDirs) {
 }
 
 /**
- * settings.json의 cleanupPeriodDays를 무조건 99999로 설정한다 (다른 필드 보존, 원자 쓰기).
+ * settings.json의 cleanupPeriodDays를 무조건 99999로 설정한다 (다른 필드 보존, 원자 쓰기, 상위 폴더가 없으면 0700으로 생성).
  * @param {string} settingsPath checkClaudeRetention()이 돌려준 settings.json 경로
- * @returns {boolean} 성공 여부 — 손상 JSON이면 수정하지 않고 false
+ * @returns {boolean} 성공 여부 — 손상 JSON이면 수정하지 않고 false, 쓰기(폴더 생성 포함)에 실패해도 false
  */
 export function applyRetentionSetting(settingsPath) {
   let config = {};
@@ -57,6 +57,7 @@ export function applyRetentionSetting(settingsPath) {
 
   try {
     const next = { ...config, cleanupPeriodDays: FOREVER_DAYS };
+    mkdirSync(dirname(settingsPath), { recursive: true, mode: 0o700 }); // Claude Code가 이 폴더에 대화 기록을 쌓는다
     const tmpPath = settingsPath + '.tmp';
     writeFileSync(tmpPath, JSON.stringify(next, null, 2) + '\n');
     renameSync(tmpPath, settingsPath); // 같은 디렉터리 내 rename = 원자적 교체
