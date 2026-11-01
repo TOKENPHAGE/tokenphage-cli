@@ -145,30 +145,30 @@ test('apply_settings없음_새로생성', () => {
 
 test('apply_상위폴더없음_폴더만들고생성', () => {
   // Given: settings.json의 상위 폴더(.claude)부터 없는 경로 (Claude Code 미사용 환경)
-  const dir = join(root, 'k', '.claude');
+  const dir = join(root, 'k', '.claude'); // makeClaudeDir는 폴더를 생성하므로 경로만 조립
   const path = join(dir, 'settings.json');
 
-  // When
+  // When: 로그인 확인에서 Yes 선택 시의 호출
   const ok = applyRetentionSetting(path);
 
-  // Then: 본인만 접근하는 폴더와 파일을 만들고, 다음 검사에서는 설정이 필요 없다
-  assert.equal(ok, true);
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).cleanupPeriodDays, FOREVER_DAYS);
-  assert.equal(checkClaudeRetention([dir]).needed, false);
-  if (process.platform !== 'win32') assert.equal(statSync(dir).mode & 0o777, 0o700); // Windows는 mode를 무시한다
+  // Then
+  assert.equal(ok, true); // ~/.claude가 없으면 설정 저장이 실패하던 버그(#28) 재현 지점, 수정 전에는 ENOENT로 false
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).cleanupPeriodDays, FOREVER_DAYS); // 반환값이 아닌 실제 파일 내용으로 확인
+  assert.equal(checkClaudeRetention([dir]).needed, false); // 재로그인 시 확인이 다시 뜨지 않음
+  if (process.platform !== 'win32') assert.equal(statSync(dir).mode & 0o777, 0o700); // 권한 비트만 비교, Windows는 mode 무시
 });
 
 test('apply_상위경로가파일_예외없이false', () => {
   // Given: 상위 경로 중간이 일반 파일이라 폴더를 만들 수 없다
   const blocker = join(root, 'blocker');
-  writeFileSync(blocker, 'x');
+  writeFileSync(blocker, 'x'); // chmod 대신 파일로 차단(root·OS와 무관하게 mkdir 실패)
 
-  // When
+  // When: 예외 없이 끝나야 함(mkdirSync가 try 밖으로 빠지는 회귀 감지)
   const ok = applyRetentionSetting(join(blocker, '.claude', 'settings.json'));
 
-  // Then: 예외 없이 false(호출부가 수동 안내로 간다), 막고 있던 파일은 그대로
-  assert.equal(ok, false);
-  assert.equal(readFileSync(blocker, 'utf8'), 'x');
+  // Then
+  assert.equal(ok, false); // false면 호출부가 수동 안내 출력
+  assert.equal(readFileSync(blocker, 'utf8'), 'x'); // 경로를 막던 파일 보존
 });
 
 test('constants_DEFAULT_CLEANUP_DAYS_기본30', () => {
