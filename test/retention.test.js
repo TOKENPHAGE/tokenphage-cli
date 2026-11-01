@@ -1,6 +1,6 @@
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync, statSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { checkClaudeRetention, applyRetentionSetting, FOREVER_DAYS, DEFAULT_CLEANUP_DAYS } from '../src/lib/retention.js';
@@ -17,8 +17,10 @@ import { checkClaudeRetention, applyRetentionSetting, FOREVER_DAYS, DEFAULT_CLEA
 // 6. apply_기존필드보존하며무조건99999_원자쓰기              (성공)
 // 7. apply_손상JSON_수정하지않고false                        (실패 입력)
 // 8. apply_settings없음_새로생성                             (경계)
+// 9. apply_상위폴더없음_폴더만들고생성                       (경계: Claude Code 미사용 환경)
+// 10. apply_상위경로가파일_예외없이false                     (실패 입력)
 // [constants]
-// 9. constants_DEFAULT_CLEANUP_DAYS_기본30                   (성공)
+// 11. constants_DEFAULT_CLEANUP_DAYS_기본30                  (성공)
 
 let root;
 const cleanupDirs = [];
@@ -139,6 +141,34 @@ test('apply_settings없음_새로생성', () => {
   // Then: 필드 하나짜리 JSON 생성
   assert.equal(ok, true);
   assert.equal(JSON.parse(readFileSync(path, 'utf8')).cleanupPeriodDays, FOREVER_DAYS);
+});
+
+test('apply_상위폴더없음_폴더만들고생성', () => {
+  // Given: settings.json의 상위 폴더(.claude)부터 없는 경로 (Claude Code 미사용 환경)
+  const dir = join(root, 'k', '.claude'); // makeClaudeDir는 폴더를 생성하므로 경로만 조립
+  const path = join(dir, 'settings.json');
+
+  // When: 로그인 확인에서 Yes 선택 시의 호출
+  const ok = applyRetentionSetting(path);
+
+  // Then
+  assert.equal(ok, true); // ~/.claude가 없으면 설정 저장이 실패하던 버그(#28) 재현 지점, 수정 전에는 ENOENT로 false
+  assert.equal(JSON.parse(readFileSync(path, 'utf8')).cleanupPeriodDays, FOREVER_DAYS); // 반환값이 아닌 실제 파일 내용으로 확인
+  assert.equal(checkClaudeRetention([dir]).needed, false); // 재로그인 시 확인이 다시 뜨지 않음
+  if (process.platform !== 'win32') assert.equal(statSync(dir).mode & 0o777, 0o700); // 권한 비트만 비교, Windows는 mode 무시
+});
+
+test('apply_상위경로가파일_예외없이false', () => {
+  // Given: 상위 경로 중간이 일반 파일이라 폴더를 만들 수 없다
+  const blocker = join(root, 'blocker');
+  writeFileSync(blocker, 'x'); // chmod 대신 파일로 차단(root·OS와 무관하게 mkdir 실패)
+
+  // When: 예외 없이 끝나야 함(mkdirSync가 try 밖으로 빠지는 회귀 감지)
+  const ok = applyRetentionSetting(join(blocker, '.claude', 'settings.json'));
+
+  // Then
+  assert.equal(ok, false); // false면 호출부가 수동 안내 출력
+  assert.equal(readFileSync(blocker, 'utf8'), 'x'); // 경로를 막던 파일 보존
 });
 
 test('constants_DEFAULT_CLEANUP_DAYS_기본30', () => {
