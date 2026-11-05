@@ -1,6 +1,8 @@
 import { test, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { syncRecords, resetData, mapServerError } from '../src/sync.js';
+import { createRequire } from 'node:module';
+import { syncRecords, resetData, mapServerError, apiFetch } from '../src/sync.js';
+import { gistLogin } from '../src/auth.js';
 
 // 테스트 목록
 // 1. syncRecords_정상2xx_sync엔드포인트에계약대로POST            (성공: URL/메서드/헤더/바디 shape)
@@ -16,6 +18,14 @@ import { syncRecords, resetData, mapServerError } from '../src/sync.js';
 // 10. mapServerError_400기타_업데이트안내                       (경계)
 // 11. mapServerError_500_일시오류안내                           (성공)
 // 12. mapServerError_알수없는상태_폴백                          (실패 입력)
+// [실행시간 전송·이름표·지원 종료 안내] 흐름(경고·설정 저장)은 sync-flow.test.js
+// 13. syncRecords_토큰과실행시간_한요청에함께                   (성공)
+// 14. syncRecords_실행시간10000개_1회요청                       (경계)
+// 15. syncRecords_실행시간10001개_2회요청_두번째는records빈배열  (경계)
+// 16. API요청_sync·reset·auth_모두이름표UA                     (성공)
+// 17. mapServerError_410·426_업데이트안내                       (실패)
+// 18. apiFetch_Deprecation·Sunset·Link헤더_안내1줄             (성공)
+// 19. apiFetch_지원종료헤더없음_안내없이통과                    (엣지: headers 없음·get 없음 포함)
 //
 // syncRecords/resetData는 전역 fetch만 사용하므로(node-fetch 의존 없음) globalThis.fetch를
 // 스텁해 네트워크·DB 없이 요청 계약(URL·메서드·헤더·바디 shape)과 에러 처리를 고정한다.
@@ -27,6 +37,16 @@ const DEVICE_ID = 'device-0001';
 const RECORDS = [
   { date: '2026-06-10', model: 'claude-sonnet-4-6', inputTok: 100, outputTok: 50, cacheReadTok: 20, cacheCreateTok: 10 },
 ];
+const RUNTIMES = [
+  { date: '2026-06-10', source: 'claude', model: 'claude-sonnet-4-6', runtimeMs: 7_200_000 },
+];
+const RUNTIME_RESULT = JSON.stringify({ runtimes: { accepted: 1, rejected: 0 } });
+// 이름표 형식은 서버 감사 로그가 받는 외부 계약이라 package.json에서 따로 조립해 대조한다
+const { version: PKG_VERSION } = createRequire(import.meta.url)('../package.json');
+const EXPECTED_UA = `tokenphage-cli/${PKG_VERSION} (${process.platform}; ${process.arch}) node/${process.versions.node}`;
+
+/** 실행시간 n개를 만든다(모델 이름으로 서로 구분). */
+const runtimesOf = (n) => Array.from({ length: n }, (_, i) => ({ date: '2026-06-10', source: 'claude', model: `m-${i}`, runtimeMs: 1 }));
 
 let originalFetch;
 let calls;
@@ -169,4 +189,112 @@ test('mapServerError_500_일시오류안내', () => {
 test('mapServerError_알수없는상태_폴백', () => {
   // Given / When / Then: 매핑되지 않은 상태는 "Server error: {status}" 폴백
   assert.equal(mapServerError(418, 'teapot'), 'Server error: 418');
+});
+
+// ── 실행시간 전송·이름표·지원 종료 안내 ─────────────────────────
+test('syncRecords_토큰과실행시간_한요청에함께', async () => {
+  // Given: 서버가 실행시간 결과 본문과 함께 200을 반환
+  stubFetch({ ok: true, status: 200, body: RUNTIME_RESULT });
+
+  // When
+  await syncRecords(API_BASE, TOKEN, DEVICE_ID, RECORDS, RUNTIMES);
+
+  // Then: 한 요청 본문에 토큰과 실행시간이 함께 실린다
+  assert.equal(calls.length, 1);
+  assert.deepEqual(JSON.parse(calls[0].init.body), { deviceId: DEVICE_ID, records: RECORDS, runtimes: RUNTIMES });
+});
+
+test('syncRecords_실행시간10000개_1회요청', async () => {
+  // Given: 서버 한도(SyncRequest.MAX_RECORDS)와 같은 개수
+  stubFetch({ ok: true, status: 200, body: RUNTIME_RESULT });
+
+  // When
+  await syncRecords(API_BASE, TOKEN, DEVICE_ID, RECORDS, runtimesOf(10_000));
+
+  // Then: 나누지 않는다
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(calls[0].init.body).runtimes.length, 10_000);
+});
+
+test('syncRecords_실행시간10001개_2회요청_두번째는records빈배열', async () => {
+  // Given: 한도를 1개 넘는 실행시간
+  stubFetch({ ok: true, status: 200, body: RUNTIME_RESULT });
+  const runtimes = runtimesOf(10_001);
+
+  // When
+  await syncRecords(API_BASE, TOKEN, DEVICE_ID, RECORDS, runtimes);
+
+  // Then: 토큰은 첫 요청에 모두, 남은 실행시간은 records: []와 함께 보낸다
+  assert.equal(calls.length, 2);
+  const [first, second] = calls.map(({ init }) => JSON.parse(init.body));
+  assert.deepEqual(first, { deviceId: DEVICE_ID, records: RECORDS, runtimes: runtimes.slice(0, 10_000) });
+  assert.deepEqual(second, { deviceId: DEVICE_ID, records: [], runtimes: runtimes.slice(10_000) });
+});
+
+test('API요청_sync·reset·auth_모두이름표UA', async () => {
+  // Given: 인증 챌린지는 실패시켜 브라우저·입력 단계 전에 끝낸다
+  const agents = [];
+  globalThis.fetch = async (url, init) => {
+    agents.push(init.headers['User-Agent']);
+    return url.endsWith('/auth/challenge')
+      ? { ok: false, status: 503, text: async () => '{}' }
+      : { ok: true, status: 200, text: async () => '' };
+  };
+
+  // When
+  await syncRecords(API_BASE, TOKEN, DEVICE_ID, RECORDS);
+  await resetData(API_BASE, TOKEN);
+  await assert.rejects(() => gistLogin(API_BASE, 'octocat'), /Challenge request failed/);
+
+  // Then: 세 요청 모두 같은 이름표를 붙인다
+  assert.deepEqual(agents, [EXPECTED_UA, EXPECTED_UA, EXPECTED_UA]);
+});
+
+test('mapServerError_410·426_업데이트안내', () => {
+  // Given / When / Then: 지원 종료(410)·업그레이드 필요(426)는 업데이트 명령 안내
+  for (const status of [410, 426]) {
+    assert.equal(mapServerError(status), 'This CLI version is no longer supported. Update: npm i -g tokenphage@latest');
+  }
+});
+
+test('apiFetch_Deprecation·Sunset·Link헤더_안내1줄', async () => {
+  // Given: 지원 종료를 알리는 표준 헤더 3종(RFC 9745, RFC 8594, Link rel="deprecation")
+  const cases = [
+    { headers: { Deprecation: '@1798761599' }, expected: [/deprecated/, /npm i -g tokenphage@latest/] },
+    { headers: { Sunset: 'Thu, 31 Dec 2026 23:59:59 GMT' }, expected: [/Thu, 31 Dec 2026 23:59:59 GMT/] },
+    {
+      headers: { Link: '<https://a.example/alt>; rel="alternate", <https://tokenphage.com/deprecation>; rel="deprecation"; type="text/html"' },
+      expected: [/https:\/\/tokenphage\.com\/deprecation/],
+    },
+  ];
+  for (const { headers, expected } of cases) {
+    const notices = [];
+
+    // When
+    await apiFetch(`${API_BASE}/api/sync`, { method: 'POST' }, {
+      fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers(headers) }),
+      onNotice: (msg) => notices.push(msg),
+    });
+
+    // Then: 안내 1줄에 업데이트 방법과 헤더 정보가 담긴다
+    assert.equal(notices.length, 1, JSON.stringify(headers));
+    for (const pattern of expected) assert.match(notices[0], pattern);
+  }
+});
+
+test('apiFetch_지원종료헤더없음_안내없이통과', async () => {
+  // Given: headers 없음(기존 스텁), get 없는 객체, 빈 Headers, deprecation이 아닌 Link
+  const variants = [undefined, {}, new Headers(), new Headers({ Link: '<https://a.example/next>; rel="next"' })];
+  const notices = [];
+
+  // When
+  for (const headers of variants) {
+    await apiFetch(`${API_BASE}/api/sync`, { method: 'POST' }, {
+      fetchImpl: async () => ({ ok: true, status: 200, headers }),
+      onNotice: (msg) => notices.push(msg),
+    });
+  }
+
+  // Then: 예외도 안내도 없다
+  assert.deepEqual(notices, []);
 });

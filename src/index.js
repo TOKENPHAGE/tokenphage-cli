@@ -5,14 +5,14 @@
  *       맨 끝 program.parse()가 argv를 해석해 실제 시동을 건다.
  */
 import { Command } from 'commander';
-import { parseAll } from './parser.js';
-import { loadConfig, loadToken, saveToken, getOrCreateDeviceId, gistLogin, setHookInstalled, getLastSyncDate, saveLastSyncDate, clearLastSyncDate } from './auth.js';
-import { syncRecords, resetData } from './sync.js';
+import { parseLogs } from './parser.js';
+import { loadConfig, loadToken, saveToken, getOrCreateDeviceId, gistLogin, setHookInstalled, clearSyncState } from './auth.js';
+import { resetData } from './sync.js';
+import { runSyncFlow } from './sync-flow.js';
 import { installHook, uninstallHook } from './scheduler.js';
 import { reconcileHookRegistration } from './hook-reconcile.js';
 import { promptFirstRun, promptDashboard, promptAdvanced, confirmReset, pauseForEnter, showError } from './ui.js';
 import { accent } from './gradient.js';
-import { localDateOf } from './lib/dates.js';
 import { claudeDirCandidates } from './parser.js';
 import { checkClaudeRetention, applyRetentionSetting, DEFAULT_CLEANUP_DAYS } from './lib/retention.js';
 import { checkLatestVersion, getUpdateInfo } from './lib/update-check.js';
@@ -126,30 +126,11 @@ async function promptRetentionSetup() {
   }
 }
 
-/** sync 명령 본체: 로컬 로그를 파싱(최초=전체 / 이후=증분)해 서버로 업로드하고, 마지막 sync 날짜를 갱신한다. */
+/** sync 명령 본체: 인증·기기 ID를 확인하고 sync 흐름(sync-flow.js)을 실행한다. */
 async function runSync() {
   const token = requireToken();
   const deviceId = getOrCreateDeviceId();
-  const today = localDateOf(new Date());
-
-  // 최초(lastSyncDate 없음)면 fromDate=null → 전체 히스토리 파싱.
-  // 이후엔 직전 sync일부터 오늘까지 증분만 파싱.
-  const lastSyncDate = getLastSyncDate();
-  const fromDate = lastSyncDate ?? null;
-
-  console.log(`Parsing local logs... (${fromDate ?? 'beginning'} ~ ${today})`);
-  const records = await parseAll(fromDate);
-  console.log(`${records.length} records aggregated (date×model)`);
-  if (records.length === 0) {
-    console.log('Nothing to sync.');
-    saveLastSyncDate(today);
-    return;
-  }
-
-  console.log('Uploading to server...');
-  await syncRecords(API_BASE, token, deviceId, records);
-  saveLastSyncDate(today);
-  console.log('Done! Badge will update shortly.');
+  await runSyncFlow({ apiBase: API_BASE, token, deviceId, parseLogs });
 }
 
 /**
@@ -183,8 +164,8 @@ async function runAdvanced(apiBase, cfg) {
     await pauseForEnter();
     return;
   }
-  // 2단계: 로컬 워터마크 제거 후 전체 재-sync. 재-sync가 실패해도 서버 삭제는 이미 완료됐음을 명확히 안내.
-  clearLastSyncDate();
+  // 2단계: 로컬 워터마크(lastSyncDate·lastSyncVersion) 제거 후 전체 재-sync. 재-sync가 실패해도 서버 삭제는 이미 완료됐음을 명확히 안내.
+  clearSyncState();
   console.log(accent('  [OK] Server data reset.') + ' Re-syncing from scratch...');
   try {
     await runSync();

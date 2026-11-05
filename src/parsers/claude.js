@@ -50,9 +50,10 @@ function mergedEntry(existing, usage, timestamp) {
 /**
  * Claude 트랜스크립트 파일들을 응답(dedup된 메시지) 단위 usage 목록으로 파싱한다.
  * @param {string[]} files JSONL 파일 경로 목록 (정렬된 순서 = 파일 간 first-wins 기준)
+ * @param {((record: object, file: string) => void)|null} [onRecord] 파싱한 줄마다 부르는 수집기(예외를 던지지 않아야 한다)
  * @returns {Promise<Array<{date: string, model: string, inputTok: number, outputTok: number, cacheReadTok: number, cacheCreateTok: number}>>}
  */
-export async function parseClaudeFiles(files) {
+export async function parseClaudeFiles(files, onRecord = null) {
   const deduped = new Map(); // key → { file, ts, ...entry }
   const noKey = [];          // dedup 키를 만들 수 없는 라인은 전부 집계
 
@@ -62,6 +63,7 @@ export async function parseClaudeFiles(files) {
       if (!line.trim()) continue;
       try {
         const obj = JSON.parse(line);
+        onRecord?.(obj, file);
         if (obj.type !== 'assistant') continue;
         const msg = obj.message;
         if (!msg?.usage) continue;

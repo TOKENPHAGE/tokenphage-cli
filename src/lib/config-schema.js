@@ -83,6 +83,7 @@ export function normalizeConfig(raw, today) {
   dropIf('token', isJwtShape);
   dropIf('deviceId', isUuid);                         // 없으면 getOrCreateDeviceId가 재발급
   dropIf('lastSyncDate', (v) => isYmdDate(v, today)); // 없으면 전체 재파싱
+  dropIf('lastSyncVersion', (v) => typeof v === 'string' && v !== ''); // 없으면 실행시간 전체 재전송
   dropIf('hookInstalledAt', isIsoDate);
   dropIf('hookInstalled', (v) => typeof v === 'boolean');
   dropIf('claudePaths', isStringArray);
