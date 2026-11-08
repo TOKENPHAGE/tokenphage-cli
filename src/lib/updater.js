@@ -1,12 +1,12 @@
 /**
  * 1-클릭 업데이트: 전역(npm i -g) 설치인지 감지해, 전역이면 최신버전을 설치하고,
- * 그 외(npx/로컬 의존성/git clone)면 정확한 수동 명령을 안내한다.
+ * 그 외(npx/로컬 의존성/git clone)면 정확한 수동 명령을, 전역 폴더에 쓸 권한이 없으면(sudo로 설치) sudo 명령을 안내한다.
  *
  * 현재 프로세스는 설치 직후에도 여전히 "구버전 코드"이므로(핫스왑 불가),
  * 성공 시 재실행을 안내하고 호출부(index.js)에서 프로세스를 종료한다.
  */
 import { spawn, execFileSync } from 'child_process';
-import { realpathSync } from 'fs';
+import { realpathSync, accessSync, constants } from 'fs';
 import chalk from 'chalk';
 import { accent } from '../gradient.js';
 import { PACKAGE_NAME } from './update-check.js';
@@ -26,14 +26,26 @@ function globalRoot() {
   }
 }
 
-/** 현재 실행 중인 CLI가 전역 npm 설치(.../lib/node_modules/...)인지 realpath prefix 매칭으로 판정한다. */
-function isGlobalInstall() {
+/** 현재 실행 중인 CLI가 전역 npm 설치(.../lib/node_modules/...)면 전역 루트(realpath)를, 아니면 null을 반환한다. */
+function globalInstallRoot() {
   try {
     const script = realpathSync(process.argv[1]);
     const root = globalRoot();
-    return !!root && script.startsWith(realpathSync(root));
+    if (!root) return null;
+    const realRoot = realpathSync(root);
+    return script.startsWith(realRoot) ? realRoot : null;
   } catch {
-    return false; // 불확실하면 전역 아님으로 간주 → 수동 안내(잘못된 npm i -g 방지)
+    return null; // 불확실하면 전역 아님으로 간주 → 수동 안내(잘못된 npm i -g 방지)
+  }
+}
+
+/** 현재 계정에 dir 쓰기 권한이 없어(EACCES) sudo가 필요한지. 읽기 전용 FS(EROFS) 등은 sudo로도 안 풀려 false. */
+function needsSudo(dir) {
+  try {
+    accessSync(dir, constants.W_OK);
+    return false;
+  } catch (err) {
+    return err.code === 'EACCES';
   }
 }
 
@@ -60,10 +72,18 @@ function printManual() {
  * @returns {Promise<{updated:boolean}>} updated=true면 호출부가 재실행 안내 후 프로세스를 종료해야 한다.
  */
 export async function runUpdate(latest) {
+  const root = globalInstallRoot();
   // 전역 설치가 아니면 자동 업데이트가 위험/무의미 → 수동 명령만 안내.
-  if (!isGlobalInstall()) {
+  if (!root) {
     console.log(chalk.gray('  Not a global npm install — update manually:'));
     printManual();
+    return { updated: false };
+  }
+
+  // 쓸 수 없는 전역 폴더면 npm은 EACCES로 실패하고 같은 명령의 재시도도 실패한다(Windows는 access가 ACL을 안 봐 제외).
+  if (!isWin && needsSudo(root)) {
+    console.log(chalk.yellow(`  No write permission to the global npm folder (${root}) — update with sudo:`));
+    console.log(accent(`  → sudo ${MANUAL_CMD}`));
     return { updated: false };
   }
 
