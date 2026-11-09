@@ -72,13 +72,15 @@ npm install -g tokenphage@latest
 
 ### ⬆️ 업데이트
 
-대시보드를 열면 새 버전이 있는지 확인합니다. 새 버전이 확인되면 대시보드 맨 위에 안내 배너가 뜨고, 메뉴에 **⬆ Update to …** 항목이 추가됩니다. 이 항목을 고르면 최신 버전이 자동으로 설치됩니다(전역 설치가 아니면 정확한 수동 명령을 안내).
+대시보드를 열면 새 버전이 있는지 확인합니다. 새 버전이 확인되면 대시보드 맨 위에 안내 배너가 뜨고, 메뉴에 **⬆ Update to …** 항목이 추가됩니다. 이 항목을 고르면 최신 버전이 자동으로 설치됩니다. 전역 설치가 아니거나, `sudo`로 설치해 전역 설치 폴더에 쓸 권한이 없으면(macOS·Linux) 그대로 실행할 명령을 안내합니다.
 
 직접 올리고 싶다면 언제든 아래 명령을 실행하면 됩니다.
 
 ```bash
 npm install -g tokenphage@latest
 ```
+
+`sudo`로 설치했다면 `sudo npm install -g tokenphage@latest`로 실행하세요.
 
 > 업데이트 알림을 끄려면 `TOKENPHAGE_NO_UPDATE_NOTIFIER=1` 환경 변수를 설정하세요.
 
