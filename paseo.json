@@ -1,0 +1,7 @@
+{
+  "worktree": { "setup": "npm ci" },
+  "scripts": {
+    "test":        { "command": "node --test $(grep -LE 'mkdtemp|better-sqlite3' test/*.test.js)" },
+    "integration": { "command": "node --test $(grep -lE 'mkdtemp|better-sqlite3' test/*.test.js)" }
+  }
+}
