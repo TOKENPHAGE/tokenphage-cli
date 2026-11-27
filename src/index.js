@@ -5,6 +5,7 @@
  *       맨 끝 program.parse()가 argv를 해석해 실제 시동을 건다.
  */
 import { Command } from 'commander';
+import { syncAgy } from './agy-sync.js';
 import { parseLogs } from './parser.js';
 import { loadConfig, loadToken, saveToken, getOrCreateDeviceId, gistLogin, setHookInstalled, clearSyncState } from './auth.js';
 import { resetData } from './sync.js';
@@ -131,6 +132,7 @@ async function runSync() {
   const token = requireToken();
   const deviceId = getOrCreateDeviceId();
   await runSyncFlow({ apiBase: API_BASE, token, deviceId, parseLogs });
+  await syncAgy({ apiBase: API_BASE, token, deviceId });
 }
 
 /**
